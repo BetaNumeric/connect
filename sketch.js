@@ -29,8 +29,17 @@ let minTime = 0, minLines = 0;
 let playerMinTime = null, playerMinLines = null;
 let player = null;
 let viewportScale = 1;
-let changePlayerButtonRect = { x: 0, y: 0, w: 0, h: 0 };
-let switchPlayerButtonRect = { x: 0, y: 0, w: 0, h: 0 };
+let playerNameFieldRect = { x: 0, y: 0, w: 0, h: 0 };
+let playerPrevButtonRect = { x: 0, y: 0, w: 0, h: 0 };
+let playerNextButtonRect = { x: 0, y: 0, w: 0, h: 0 };
+let menuButtonRect = { x: 0, y: 0, w: 0, h: 0 };
+let menuButtonArmed = false;
+let resetButtonArmed = false;
+let menuDragMode = "none"; // "none" | "levels" | "scrollbar"
+let menuDragMoved = false;
+let menuDragStartX = 0;
+let menuDragStartY = 0;
+let menuScrollbarGrabOffsetX = 0;
 let scoreStore = { rows: [], activeRowId: null };
 
 class B2D {
@@ -335,13 +344,16 @@ function draw() {
   drawPermit = true;
   // Prohibits drawing lines outside of the screen.
   if (mouseX < d / 2 || mouseX > width - d / 2 || mouseY < d / 2 || mouseY > height - d / 2) drawPermit = false;
-  if (physics) box2d.step();
-  drawObjects();
+  if (gameMode !== 4) {
+    if (physics) box2d.step();
+    drawObjects();
+  }
 
   if (gameMode === 0) drawStartMode();
   if (gameMode === 1) drawPlayMode(); else cursor(ARROW);
   if (gameMode === 1 && physics) drawResetButton();
   if (gameMode === 2) drawResultMode();
+  if (gameMode === 0 || gameMode === 1 || gameMode === 2) drawGlobalMenuButton();
   if (gameMode === 4) drawLevelMenu();
   if (gameMode === 5) {
     saveLevelPreview(level);
@@ -353,12 +365,6 @@ function draw() {
 function drawStartMode() {
   // Draw level info and play button before entering drawing mode.
   noStroke();
-  textAlign(LEFT);
-  textSize(width / 40);
-  fill(0, 127);
-  if (mouseX < width / 40 + width / 15 && mouseY < height / 20) fill(0);
-  text("Menu", width / 40, height / 20);
-
   fill(255, 127); noStroke(); rect(width / 2, height / 2, width, height);
   buttonX = width / 2; buttonY = height / 2; buttonW = height / 4;
   textAlign(CENTER); textSize(width / 20); fill(0); text(`Level: ${level + 1}`, width / 2, height / 5);
@@ -375,9 +381,10 @@ function drawPlayMode() {
   if (!physics) timeStart = millis(); else testConnection();
   time = millis() - timeStart;
   noStroke();
-  textAlign(LEFT); textSize(height / 30); fill(0); text(`${fmtSecs(time)}s`, width / 100, height / 25);
+  textAlign(CENTER); textSize(height / 30); fill(0); text(`${fmtSecs(time)}s`, width / 2, height / 25);
 
-  noCursor(); noStroke(); fill(127); ellipse(mouseX, mouseY, d, d);
+  if (!pointInRect(mouseX, mouseY, getMenuButtonRect())) noCursor();
+  noStroke(); fill(127); ellipse(mouseX, mouseY, d, d);
   strokeWeight(d); stroke(127, 127);
   if (mouseIsPressed && linePos.length > 0) {
     const l = linePos[linePos.length - 1];
@@ -409,11 +416,6 @@ function drawResultMode() {
   fill(255, 127); noStroke(); rect(width / 2, height / 2, width, height);
   buttonX = width / 2; buttonY = height / 2; buttonW = height / 4;
 
-  noStroke();
-  textAlign(LEFT); textSize(width / 40); fill(0, 127);
-  if (mouseX < width / 40 + width / 15 && mouseY < height / 20) fill(0);
-  text("Menu", width / 40, height / 20);
-
   textAlign(CENTER); textSize(width / 20); fill(0);
   text(`Level: ${level + 1}`, width / 2, height / 5);
   text(levelUp ? "Complete!" : "Failed!", width / 2, height / 3);
@@ -440,33 +442,42 @@ function drawLevelMenu() {
   // Draw scrollable level selection menu with player controls.
   background(200);
   drawMenuTopPlayerBar();
-  strokeWeight(1); stroke(0);
+  strokeWeight(1);
+  stroke(170);
   imgW = width / 3; imgH = height / 3; imgX = imgScroll; imgY = height / 2;
-  if (mouseY < imgY + imgH && mouseY > imgY - imgH && mouseIsPressed && abs(mouseX - pmouseX) > 0) cursor(MOVE); else cursor(ARROW);
+  const levelPitch = getLevelCardPitch();
+  imgScroll = clampLevelScroll(imgScroll);
+  if (menuDragMode !== "none") cursor(MOVE);
+  else cursor(ARROW);
 
   tint(255, 255);
   for (let i = 0; i < levelImg.length; i++) {
+    const cardX = imgX + levelPitch * i + imgW / 2;
     fill(255);
-    if (levelImg[i]) image(levelImg[i], imgX + imgW * i + imgW / 2, imgY - imgH / 2, imgW, imgH);
-    else rect(imgX + imgW * i + imgW / 2, imgY - imgH / 2, imgW, imgH);
-    noFill(); rect(imgX + imgW * i + imgW / 2, imgY - imgH / 2, imgW, imgH);
-    fill(127); rect(imgX + imgW * i + imgW / 2, imgY + imgH / 2, imgW, imgH);
+    if (levelImg[i]) image(levelImg[i], cardX, imgY - imgH / 2, imgW, imgH);
+    else rect(cardX, imgY - imgH / 2, imgW, imgH);
+    fill(127); rect(cardX, imgY + imgH / 2, imgW, imgH);
     calcScore(i);
     noStroke();
-    textSize(imgW / 15); textAlign(LEFT); fill(0); text(`Level: ${i + 1}`, 3 + imgX + imgW * i + imgW / 2, 2 + imgY - imgH / 2, imgW, imgH);
+    textSize(imgW / 15); textAlign(LEFT); fill(0); text(`Level: ${i + 1}`, 3 + cardX, 2 + imgY - imgH / 2, imgW, imgH);
     textSize(imgW / 12); fill(255);
     if (minLines > 0 && minTime > 0 && playerMinLines && playerMinTime) {
-      text(`Best:\n${minLines} ${minLines > 1 ? "Lines" : "Line"} (by: ${playerMinLines})\n${fmtSecs(minTime)} Seconds (by: ${playerMinTime})`, 5 + imgX + imgW * i + imgW / 2, 5 + imgY + imgH / 2, imgW - 5, imgH);
-    } else text("Best:\n -\n -", 5 + imgX + imgW * i + imgW / 2, 5 + imgY + imgH / 2, imgW - 5, imgH);
+      text(`Best:\n${minLines} ${minLines > 1 ? "Lines" : "Line"} (by: ${playerMinLines})\n${fmtSecs(minTime)} Seconds (by: ${playerMinTime})`, 5 + cardX, 5 + imgY + imgH / 2, imgW - 5, imgH);
+    } else text("Best:\n -\n -", 5 + cardX, 5 + imgY + imgH / 2, imgW - 5, imgH);
   }
 
-  fill(100); rect(width / 2, imgY + imgH + height / 40, width, height / 20);
-  fill(200); rect(map(imgScroll, 0, width - imgW * (MAX_LEVEL + 1), height / 20, width - height / 20), imgY + imgH + height / 40, height / 10, height / 20);
+  const scrollbar = getLevelScrollbarGeometry();
+  noStroke();
+  fill(100);
+  rect(width / 2, scrollbar.trackY, width, scrollbar.track.h);
+  fill(200);
+  rect(scrollbar.handle.x + scrollbar.handle.w / 2, scrollbar.trackY, scrollbar.handle.w, scrollbar.handle.h);
 
   selectedLevel = -1;
   for (let i = 0; i < levelImg.length; i++) {
-    if (mouseX > imgX + imgW * i && mouseX < imgX + imgW * i + imgW && mouseY < imgY && mouseY > imgY - imgH) {
-      strokeWeight(5); stroke(0); noFill(); rect(imgX + imgW * i + imgW / 2, imgY - imgH / 2, imgW, imgH);
+    const cardLeft = imgX + levelPitch * i;
+    if (mouseX > cardLeft && mouseX < cardLeft + imgW && mouseY < imgY && mouseY > imgY - imgH) {
+      strokeWeight(5); stroke(0); noFill(); rect(cardLeft + imgW / 2, imgY - imgH / 2, imgW, imgH);
       selectedLevel = i;
     }
   }
@@ -478,52 +489,65 @@ function drawMenuTopPlayerBar() {
   const canSwitch = names.length > 1;
   const barY = height / 18;
   const barH = height / 16;
-  const labelW = width * 0.36;
-  const changeW = width * 0.16;
-  const switchW = width * 0.16;
+  const fieldW = width * 0.42;
+  const chevW = width * 0.06;
   const gap = width * 0.012;
-  const left = width / 40;
-  const labelText = hasPlayer ? `Player: ${player}` : "Player: Not set";
+  const centerX = width / 2;
+  const labelText = hasPlayer ? player : "Set Player Name";
 
-  const labelCx = left + labelW / 2;
-  const changeCx = left + labelW + gap + changeW / 2;
-  const switchCx = left + labelW + gap + changeW + gap + switchW / 2;
+  const fieldCx = centerX;
+  const prevCx = fieldCx - fieldW / 2 - gap - chevW / 2;
+  const nextCx = fieldCx + fieldW / 2 + gap + chevW / 2;
 
-  changePlayerButtonRect = {
-    x: changeCx - changeW / 2,
+  playerNameFieldRect = {
+    x: fieldCx - fieldW / 2,
     y: barY - barH / 2,
-    w: changeW,
+    w: fieldW,
     h: barH,
   };
-  switchPlayerButtonRect = {
-    x: switchCx - switchW / 2,
+  playerPrevButtonRect = {
+    x: prevCx - chevW / 2,
     y: barY - barH / 2,
-    w: switchW,
+    w: chevW,
+    h: barH,
+  };
+  playerNextButtonRect = {
+    x: nextCx - chevW / 2,
+    y: barY - barH / 2,
+    w: chevW,
     h: barH,
   };
 
   noStroke();
-  fill(255, 220);
-  rect(labelCx, barY, labelW, barH, barH * 0.2);
-  textAlign(LEFT, CENTER);
+  const fieldHover = pointInRect(mouseX, mouseY, playerNameFieldRect);
+  fill(fieldHover ? color(245, 245, 245, 240) : color(255, 220));
+  rect(fieldCx, barY, fieldW, barH, barH * 0.2);
+  textAlign(CENTER, CENTER);
   textSize(height / 34);
   fill(hasPlayer ? 0 : color(140, 0, 0));
-  text(labelText, left + width / 70, barY);
+  text(labelText, fieldCx, barY);
 
-  const changeHover = pointInRect(mouseX, mouseY, changePlayerButtonRect);
-  fill(changeHover ? color(40, 40, 40) : color(20, 20, 20));
-  rect(changeCx, barY, changeW, barH, barH * 0.2);
-  textAlign(CENTER, CENTER);
-  textSize(height / 38);
-  fill(255);
-  text(hasPlayer ? "Change" : "Set Name", changeCx, barY);
+  const prevHover = pointInRect(mouseX, mouseY, playerPrevButtonRect);
+  fill(canSwitch ? (prevHover ? color(40, 40, 40) : color(20, 20, 20)) : color(120));
+  rect(prevCx, barY, chevW, barH, barH * 0.2);
+  stroke(255);
+  strokeWeight(Math.max(2, barH * 0.09));
+  noFill();
+  const chevronHalfW = chevW * 0.14;
+  const chevronHalfH = barH * 0.22;
+  line(prevCx + chevronHalfW, barY - chevronHalfH, prevCx - chevronHalfW, barY);
+  line(prevCx - chevronHalfW, barY, prevCx + chevronHalfW, barY + chevronHalfH);
+  noStroke();
 
-  const switchHover = pointInRect(mouseX, mouseY, switchPlayerButtonRect);
-  const switchEnabledColor = switchHover ? color(40, 40, 40) : color(20, 20, 20);
-  fill(canSwitch ? switchEnabledColor : color(120));
-  rect(switchCx, barY, switchW, barH, barH * 0.2);
-  fill(255);
-  text(canSwitch ? "Switch" : "Switch", switchCx, barY);
+  const nextHover = pointInRect(mouseX, mouseY, playerNextButtonRect);
+  fill(canSwitch ? (nextHover ? color(40, 40, 40) : color(20, 20, 20)) : color(120));
+  rect(nextCx, barY, chevW, barH, barH * 0.2);
+  stroke(255);
+  strokeWeight(Math.max(2, barH * 0.09));
+  noFill();
+  line(nextCx - chevronHalfW, barY - chevronHalfH, nextCx + chevronHalfW, barY);
+  line(nextCx + chevronHalfW, barY, nextCx - chevronHalfW, barY + chevronHalfH);
+  noStroke();
 }
 
 function pointInRect(px, py, rectData) {
@@ -533,6 +557,70 @@ function pointInRect(px, py, rectData) {
     py >= rectData.y &&
     py <= rectData.y + rectData.h
   );
+}
+
+function getLevelCardGap() {
+  return 2;
+}
+
+function getLevelCardPitch() {
+  return imgW + getLevelCardGap();
+}
+
+function getLevelStripMinScroll() {
+  const stripW = getLevelCardPitch() * (MAX_LEVEL + 1);
+  return width - stripW;
+}
+
+function clampLevelScroll(value) {
+  const minScroll = getLevelStripMinScroll();
+  return constrain(value, minScroll, 0);
+}
+
+function getLevelScrollbarGeometry() {
+  const trackY = imgY + imgH + height / 40;
+  const trackH = height / 20;
+  const trackPadding = height / 20;
+  const minScroll = getLevelStripMinScroll();
+  const handleW = height / 10;
+  const handleH = height / 20;
+  const handleCenterX = map(imgScroll, 0, minScroll, trackPadding, width - trackPadding);
+  return {
+    track: { x: 0, y: trackY - trackH / 2, w: width, h: trackH },
+    handle: { x: handleCenterX - handleW / 2, y: trackY - handleH / 2, w: handleW, h: handleH },
+    trackPadding,
+    trackY,
+    minScroll,
+  };
+}
+
+function getMenuButtonRect() {
+  const w = width / 8;
+  const h = height / 16;
+  const x = width / 40;
+  const y = height / 40;
+  return { x, y, w, h };
+}
+
+function drawGlobalMenuButton() {
+  menuButtonRect = getMenuButtonRect();
+  const { x, y, w, h } = menuButtonRect;
+  const hover = pointInRect(mouseX, mouseY, menuButtonRect);
+  if (hover) cursor(HAND);
+  noStroke();
+  fill(0, hover ? 255 : 127);
+  rect(x + w / 2, y + h / 2, w, h, h * 0.25);
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textSize(h * 0.52);
+  text("Menu", x + w / 2, y + h / 2);
+}
+
+function enterMenu() {
+  physics = false;
+  linePos = [];
+  linePosTest = [];
+  gameMode = 4;
 }
 
 function getPlayerNames() {
@@ -557,7 +645,7 @@ function promptForPlayerName() {
   return true;
 }
 
-function cyclePlayer() {
+function cyclePlayer(direction = 1) {
   const names = getPlayerNames();
   if (names.length < 1) {
     promptForPlayerName();
@@ -565,7 +653,7 @@ function cyclePlayer() {
   }
 
   const idx = names.indexOf(player);
-  const nextIndex = idx >= 0 ? (idx + 1) % names.length : 0;
+  const nextIndex = idx >= 0 ? (idx + direction + names.length) % names.length : 0;
   selectExistingPlayer(names[nextIndex]);
 }
 
@@ -679,17 +767,45 @@ function keyPressed() {
   if (player !== null) {
     if (key === "I" || key === "i") info = !info;
     if (keyCode === ENTER) gameMode = 5;
-    if (keyCode === ESCAPE) { gameMode = 4; return false; }
+    if (keyCode === ESCAPE) { enterMenu(); return false; }
   }
   return true;
 }
 
 function mousePressed() {
   // Adds first coordinate to linePos when the mouse is pressed.
+  const menuRect = getMenuButtonRect();
+  menuButtonArmed = (gameMode === 0 || gameMode === 1 || gameMode === 2) && pointInRect(mouseX, mouseY, menuRect);
+  resetButtonArmed = gameMode === 1 && dist(mouseX, mouseY, width - height / 10, height / 10) < (height / 10) / 2;
+  if (gameMode === 1 && (menuButtonArmed || resetButtonArmed)) return;
+
   checkEdge();
   if (drawPermit && gameMode === 1) linePos.push(createVector(mouseX, mouseY));
-  if (gameMode === 4 && mouseX >= height / 40 && mouseX <= width - height / 40 && mouseY >= imgY + imgH && mouseY <= imgY + imgH + height / 20) {
-    imgScroll = map(mouseX, height / 20, width - height / 20, 0, width - imgW * (MAX_LEVEL + 1));
+  if (gameMode === 4) {
+    menuDragMode = "none";
+    menuDragMoved = false;
+    menuDragStartX = mouseX;
+    menuDragStartY = mouseY;
+    menuScrollbarGrabOffsetX = 0;
+
+    const scrollbar = getLevelScrollbarGeometry();
+    const inTrack = pointInRect(mouseX, mouseY, scrollbar.track);
+    if (inTrack) {
+      menuDragMode = "scrollbar";
+      const handleCenterX = scrollbar.handle.x + scrollbar.handle.w / 2;
+      if (pointInRect(mouseX, mouseY, scrollbar.handle)) {
+        menuScrollbarGrabOffsetX = mouseX - handleCenterX;
+      }
+      const clampedCenterX = constrain(mouseX - menuScrollbarGrabOffsetX, scrollbar.trackPadding, width - scrollbar.trackPadding);
+      imgScroll = map(clampedCenterX, scrollbar.trackPadding, width - scrollbar.trackPadding, 0, scrollbar.minScroll);
+      imgScroll = clampLevelScroll(imgScroll);
+      return;
+    }
+
+    const inLevelStrip = mouseY <= imgY + imgH && mouseY >= imgY - imgH;
+    if (inLevelStrip) {
+      menuDragMode = "levels";
+    }
   }
 }
 
@@ -703,16 +819,21 @@ function mouseDragged() {
     } else linePos.push(createVector(mouseX, mouseY));
   }
   if (gameMode === 4) {
-    if (mouseY < imgY + imgH && mouseY > imgY - imgH && imgScroll + (mouseX - pmouseX) <= 0 && imgScroll + (mouseX - pmouseX) >= width - imgW * (MAX_LEVEL + 1)) imgScroll += mouseX - pmouseX;
-    if (mouseX >= height / 40 && mouseX <= width - height / 40 && mouseY >= imgY + imgH && mouseY <= imgY + imgH + height / 20) {
-      imgScroll = map(mouseX, height / 40, width - height / 40, 0, width - imgW * (MAX_LEVEL + 1));
+    if (menuDragMode === "levels") {
+      imgScroll = clampLevelScroll(imgScroll + (mouseX - pmouseX));
+    } else if (menuDragMode === "scrollbar") {
+      const scrollbar = getLevelScrollbarGeometry();
+      const clampedCenterX = constrain(mouseX - menuScrollbarGrabOffsetX, scrollbar.trackPadding, width - scrollbar.trackPadding);
+      imgScroll = map(clampedCenterX, scrollbar.trackPadding, width - scrollbar.trackPadding, 0, scrollbar.minScroll);
+      imgScroll = clampLevelScroll(imgScroll);
     }
+    if (!menuDragMoved && dist(mouseX, mouseY, menuDragStartX, menuDragStartY) > 3) menuDragMoved = true;
   }
 }
 
 function mouseWheel(e) {
   const c = e.deltaY === 0 ? 0 : Math.sign(e.deltaY);
-  if (imgScroll + c <= 0 && imgScroll + c >= width - imgW * (MAX_LEVEL + 1)) imgScroll += c * 20;
+  if (gameMode === 4 && c !== 0) imgScroll = clampLevelScroll(imgScroll + c * 20);
   return false;
 }
 
@@ -722,18 +843,24 @@ function mouseClicked() {
     accidental reset while drawing because release is handled separately.
   */
   if (gameMode === 4) {
-    if (pointInRect(mouseX, mouseY, changePlayerButtonRect)) {
+    if (menuDragMoved) {
+      menuDragMoved = false;
+      return;
+    }
+    if (pointInRect(mouseX, mouseY, playerNameFieldRect)) {
       promptForPlayerName();
       return;
     }
-    if (pointInRect(mouseX, mouseY, switchPlayerButtonRect) && getPlayerNames().length > 1) {
-      cyclePlayer();
+    if (pointInRect(mouseX, mouseY, playerPrevButtonRect) && getPlayerNames().length > 1) {
+      cyclePlayer(-1);
+      return;
+    }
+    if (pointInRect(mouseX, mouseY, playerNextButtonRect) && getPlayerNames().length > 1) {
+      cyclePlayer(1);
       return;
     }
   }
 
-  if (gameMode === 1 && dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2) loadLevel();
-  if ((gameMode === 0 || gameMode === 2) && mouseX < width / 40 + width / 15 && mouseY < height / 20) gameMode = 4;
   if (mouseY < imgY + imgH && mouseY > imgY - imgH && gameMode === 4 && selectedLevel !== -1) {
     if (player === null && !promptForPlayerName()) return;
     level = selectedLevel;
@@ -747,14 +874,42 @@ function mouseReleased() {
     If gameMode is 1, convert drawn coordinates into a physical line.
     Otherwise handle button clicks to reset/load level.
   */
+  if (gameMode === 4) {
+    menuDragMode = "none";
+    menuScrollbarGrabOffsetX = 0;
+  }
+
+  if (
+    (gameMode === 0 || gameMode === 1 || gameMode === 2) &&
+    menuButtonArmed &&
+    pointInRect(mouseX, mouseY, getMenuButtonRect())
+  ) {
+    enterMenu();
+    menuButtonArmed = false;
+    resetButtonArmed = false;
+    return;
+  }
+
   if (gameMode === 1) {
+    let drewLine = false;
     if (linePos.length > 0) {
       lines.push(new LineBody(linePos, d));
       totalLines++;
       linePos = [];
       physics = true;
+      drewLine = true;
     }
-  } else if (player !== null && dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2) loadLevel();
+    if (
+      !drewLine &&
+      physics &&
+      resetButtonArmed &&
+      dist(mouseX, mouseY, width - height / 10, height / 10) < (height / 10) / 2
+    ) {
+      loadLevel();
+    }
+  } else if ((gameMode === 0 || gameMode === 2) && player !== null && dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2) loadLevel();
+  resetButtonArmed = false;
+  menuButtonArmed = false;
 }
 
 function checkEdge() {
