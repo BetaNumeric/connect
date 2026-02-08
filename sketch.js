@@ -1,4 +1,6 @@
 /* global planck */
+const BASE_WIDTH = 1024;
+const BASE_HEIGHT = 768;
 const MAX_LEVEL = 20;
 const SCORE_KEY = "connect_scores_v1";
 const PREVIEW_KEY = "connect_level_preview_";
@@ -27,6 +29,7 @@ let minTime = 0, minLines = 0;
 let playerMinTime = null, playerMinLines = null;
 let player = null;
 let nameInput, nameButton, changeNameButton, playerSelect;
+let viewportScale = 1;
 let scoreStore = { rows: [], activeRowId: null };
 
 class B2D {
@@ -289,7 +292,9 @@ function preload() {
 
 function setup() {
   // Initial canvas, physics world, persistence, and UI setup.
-  canvasRenderer = createCanvas(1024, 768);
+  pixelDensity(1);
+  canvasRenderer = createCanvas(BASE_WIDTH, BASE_HEIGHT);
+  fitCanvasToWindow();
   rectMode(CENTER);
   imageMode(CENTER);
   box2d = new B2D();
@@ -304,6 +309,28 @@ function setup() {
   buttonW = height / 4;
   const row = getActiveRow();
   if (row) { player = row.name; showNameUi(false); }
+}
+
+function windowResized() {
+  fitCanvasToWindow();
+}
+
+function fitCanvasToWindow() {
+  if (!canvasRenderer || !canvasRenderer.elt) return;
+  viewportScale = Math.max(0.1, Math.min(windowWidth / BASE_WIDTH, windowHeight / BASE_HEIGHT));
+  canvasRenderer.elt.style.width = `${Math.round(BASE_WIDTH * viewportScale)}px`;
+  canvasRenderer.elt.style.height = `${Math.round(BASE_HEIGHT * viewportScale)}px`;
+}
+
+function getCanvasLayout() {
+  if (!canvasRenderer || !canvasRenderer.elt) return null;
+  const canvasRect = canvasRenderer.elt.getBoundingClientRect();
+  return {
+    left: canvasRect.left + window.scrollX,
+    top: canvasRect.top + window.scrollY,
+    scaleX: canvasRect.width / width,
+    scaleY: canvasRect.height / height,
+  };
 }
 
 function draw() {
@@ -521,16 +548,21 @@ function setupNameUi() {
 function positionNameUi() {
   // Keep name controls aligned with the canvas layout.
   if (!nameInput || !nameButton || !playerSelect || !canvasRenderer) return;
-  const canvasRect = canvasRenderer.elt.getBoundingClientRect();
-  const canvasLeft = canvasRect.left + window.scrollX;
-  const canvasTop = canvasRect.top + window.scrollY;
+  const layout = getCanvasLayout();
+  if (!layout) return;
 
-  nameInput.position(canvasLeft + width / 4, canvasTop + height / 2);
-  nameInput.size(width / 2, height / 20);
-  nameButton.position(canvasLeft + width / 2 - width / 20, canvasTop + height / 2 + height / 20 + 10);
-  nameButton.size(width / 10, height / 20);
-  playerSelect.position(canvasLeft + width / 4, canvasTop + height / 2 + height / 20 + 10 + height / 20 + 10);
-  playerSelect.size(width / 2, height / 20);
+  nameInput.position(layout.left + (width / 4) * layout.scaleX, layout.top + (height / 2) * layout.scaleY);
+  nameInput.size((width / 2) * layout.scaleX, (height / 20) * layout.scaleY);
+  nameButton.position(
+    layout.left + (width / 2 - width / 20) * layout.scaleX,
+    layout.top + (height / 2 + height / 20) * layout.scaleY + 10 * layout.scaleY
+  );
+  nameButton.size((width / 10) * layout.scaleX, (height / 20) * layout.scaleY);
+  playerSelect.position(
+    layout.left + (width / 4) * layout.scaleX,
+    layout.top + (height / 2 + height / 20 + height / 20) * layout.scaleY + 20 * layout.scaleY
+  );
+  playerSelect.size((width / 2) * layout.scaleX, (height / 20) * layout.scaleY);
 }
 
 function showNameUi(show) {
@@ -542,13 +574,15 @@ function showNameUi(show) {
 
 function positionChangeNameUi() {
   if (!changeNameButton || !canvasRenderer) return;
-  const canvasRect = canvasRenderer.elt.getBoundingClientRect();
-  const canvasLeft = canvasRect.left + window.scrollX;
-  const canvasTop = canvasRect.top + window.scrollY;
-  const buttonW = width / 8;
-  const buttonH = height / 22;
+  const layout = getCanvasLayout();
+  if (!layout) return;
+  const buttonW = (width / 8) * layout.scaleX;
+  const buttonH = (height / 22) * layout.scaleY;
   changeNameButton.size(buttonW, buttonH);
-  changeNameButton.position(canvasLeft + width - buttonW - width / 40, canvasTop + height / 40);
+  changeNameButton.position(
+    layout.left + width * layout.scaleX - buttonW - (width / 40) * layout.scaleX,
+    layout.top + (height / 40) * layout.scaleY
+  );
 }
 
 function showChangeNameUi(show) {
