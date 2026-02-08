@@ -28,8 +28,9 @@ let timeStart = 0, time = 0, totalLines = 0;
 let minTime = 0, minLines = 0;
 let playerMinTime = null, playerMinLines = null;
 let player = null;
-let nameInput, nameButton, changeNameButton, playerSelect;
 let viewportScale = 1;
+let changePlayerButtonRect = { x: 0, y: 0, w: 0, h: 0 };
+let switchPlayerButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let scoreStore = { rows: [], activeRowId: null };
 
 class B2D {
@@ -300,7 +301,6 @@ function setup() {
   box2d = new B2D();
   box2d.createWorld();
   loadScores();
-  setupNameUi();
   loadStoredPreviews();
   circleR = width / 50;
   d = width / 100;
@@ -308,7 +308,7 @@ function setup() {
   buttonY = height / 2;
   buttonW = height / 4;
   const row = getActiveRow();
-  if (row) { player = row.name; showNameUi(false); }
+  if (row) player = row.name;
 }
 
 function windowResized() {
@@ -322,23 +322,9 @@ function fitCanvasToWindow() {
   canvasRenderer.elt.style.height = `${Math.round(BASE_HEIGHT * viewportScale)}px`;
 }
 
-function getCanvasLayout() {
-  if (!canvasRenderer || !canvasRenderer.elt) return null;
-  const canvasRect = canvasRenderer.elt.getBoundingClientRect();
-  return {
-    left: canvasRect.left + window.scrollX,
-    top: canvasRect.top + window.scrollY,
-    scaleX: canvasRect.width / width,
-    scaleY: canvasRect.height / height,
-  };
-}
-
 function draw() {
   // Main game loop.
   background(255);
-  positionNameUi();
-  positionChangeNameUi();
-  if (gameMode !== 4) showChangeNameUi(false);
   fill(0);
   if (info) {
     textSize(12);
@@ -350,7 +336,7 @@ function draw() {
   // Prohibits drawing lines outside of the screen.
   if (mouseX < d / 2 || mouseX > width - d / 2 || mouseY < d / 2 || mouseY > height - d / 2) drawPermit = false;
   if (physics) box2d.step();
-  if (!(gameMode === 4 && player === null)) drawObjects();
+  drawObjects();
 
   if (gameMode === 0) drawStartMode();
   if (gameMode === 1) drawPlayMode(); else cursor(ARROW);
@@ -451,21 +437,9 @@ function drawResultMode() {
 }
 
 function drawLevelMenu() {
-  // Draw player input or scrollable level selection menu.
-  if (player === null) {
-    background(255);
-    showChangeNameUi(false);
-    noStroke();
-    fill(0); textSize(height / 25); textAlign(LEFT); text("Player Name:", width / 4, height / 2 - height / 40);
-    textSize(height / 35); fill(80); text("Or choose an existing player:", width / 4, height / 2 + height / 6);
-    showNameUi(true);
-    positionNameUi();
-    return;
-  }
-
-  showNameUi(false);
-  showChangeNameUi(true);
+  // Draw scrollable level selection menu with player controls.
   background(200);
+  drawMenuTopPlayerBar();
   strokeWeight(1); stroke(0);
   imgW = width / 3; imgH = height / 3; imgX = imgScroll; imgY = height / 2;
   if (mouseY < imgY + imgH && mouseY > imgY - imgH && mouseIsPressed && abs(mouseX - pmouseX) > 0) cursor(MOVE); else cursor(ARROW);
@@ -498,119 +472,101 @@ function drawLevelMenu() {
   }
 }
 
-function setupNameUi() {
-  // Replacement for ControlP5 text input in the web version.
-  nameInput = createInput("");
-  nameInput.attribute("id", "player-name");
-  nameInput.attribute("name", "playerName");
-  nameInput.attribute("maxlength", "24");
-  nameInput.attribute("autocomplete", "nickname");
-  nameInput.style("font-size", "24px");
-  nameInput.style("padding", "4px 8px");
-  nameInput.style("border", "1px solid #777");
-  nameButton = createButton("Play");
-  nameButton.style("font-size", "20px");
-  nameButton.style("padding", "4px 8px");
-  nameButton.mousePressed(submitName);
+function drawMenuTopPlayerBar() {
+  const names = getPlayerNames();
+  const hasPlayer = player !== null;
+  const canSwitch = names.length > 1;
+  const barY = height / 18;
+  const barH = height / 16;
+  const labelW = width * 0.36;
+  const changeW = width * 0.16;
+  const switchW = width * 0.16;
+  const gap = width * 0.012;
+  const left = width / 40;
+  const labelText = hasPlayer ? `Player: ${player}` : "Player: Not set";
 
-  playerSelect = createSelect();
-  playerSelect.attribute("id", "existing-player");
-  playerSelect.attribute("name", "existingPlayer");
-  playerSelect.style("font-size", "18px");
-  playerSelect.style("padding", "4px 8px");
-  playerSelect.changed(() => {
-    const selectedName = playerSelect.value();
-    if (!selectedName) return;
-    selectExistingPlayer(selectedName);
-    playerSelect.value("");
-  });
+  const labelCx = left + labelW / 2;
+  const changeCx = left + labelW + gap + changeW / 2;
+  const switchCx = left + labelW + gap + changeW + gap + switchW / 2;
 
-  changeNameButton = createButton("Change Player");
-  changeNameButton.attribute("id", "change-player");
-  changeNameButton.attribute("name", "changePlayer");
-  changeNameButton.style("font-size", "16px");
-  changeNameButton.style("padding", "4px 4px");
-  changeNameButton.mousePressed(() => {
-    player = null;
-    showChangeNameUi(false);
-    showNameUi(true);
-    refreshPlayerSelect();
-    positionNameUi();
-    nameInput.elt.focus();
-  });
-  nameInput.elt.addEventListener("keydown", (e) => { if (e.key === "Enter") submitName(); });
-  refreshPlayerSelect();
-  positionNameUi();
-  positionChangeNameUi();
-  showChangeNameUi(false);
+  changePlayerButtonRect = {
+    x: changeCx - changeW / 2,
+    y: barY - barH / 2,
+    w: changeW,
+    h: barH,
+  };
+  switchPlayerButtonRect = {
+    x: switchCx - switchW / 2,
+    y: barY - barH / 2,
+    w: switchW,
+    h: barH,
+  };
+
+  noStroke();
+  fill(255, 220);
+  rect(labelCx, barY, labelW, barH, barH * 0.2);
+  textAlign(LEFT, CENTER);
+  textSize(height / 34);
+  fill(hasPlayer ? 0 : color(140, 0, 0));
+  text(labelText, left + width / 70, barY);
+
+  const changeHover = pointInRect(mouseX, mouseY, changePlayerButtonRect);
+  fill(changeHover ? color(40, 40, 40) : color(20, 20, 20));
+  rect(changeCx, barY, changeW, barH, barH * 0.2);
+  textAlign(CENTER, CENTER);
+  textSize(height / 38);
+  fill(255);
+  text(hasPlayer ? "Change" : "Set Name", changeCx, barY);
+
+  const switchHover = pointInRect(mouseX, mouseY, switchPlayerButtonRect);
+  const switchEnabledColor = switchHover ? color(40, 40, 40) : color(20, 20, 20);
+  fill(canSwitch ? switchEnabledColor : color(120));
+  rect(switchCx, barY, switchW, barH, barH * 0.2);
+  fill(255);
+  text(canSwitch ? "Switch" : "Switch", switchCx, barY);
 }
 
-function positionNameUi() {
-  // Keep name controls aligned with the canvas layout.
-  if (!nameInput || !nameButton || !playerSelect || !canvasRenderer) return;
-  const layout = getCanvasLayout();
-  if (!layout) return;
-
-  nameInput.position(layout.left + (width / 4) * layout.scaleX, layout.top + (height / 2) * layout.scaleY);
-  nameInput.size((width / 2) * layout.scaleX, (height / 20) * layout.scaleY);
-  nameButton.position(
-    layout.left + (width / 2 - width / 20) * layout.scaleX,
-    layout.top + (height / 2 + height / 20) * layout.scaleY + 10 * layout.scaleY
-  );
-  nameButton.size((width / 10) * layout.scaleX, (height / 20) * layout.scaleY);
-  playerSelect.position(
-    layout.left + (width / 4) * layout.scaleX,
-    layout.top + (height / 2 + height / 20 + height / 20) * layout.scaleY + 20 * layout.scaleY
-  );
-  playerSelect.size((width / 2) * layout.scaleX, (height / 20) * layout.scaleY);
-}
-
-function showNameUi(show) {
-  const display = show ? "block" : "none";
-  if (nameInput) nameInput.style("display", display);
-  if (nameButton) nameButton.style("display", display);
-  if (playerSelect) playerSelect.style("display", display);
-}
-
-function positionChangeNameUi() {
-  if (!changeNameButton || !canvasRenderer) return;
-  const layout = getCanvasLayout();
-  if (!layout) return;
-  const buttonW = (width / 8) * layout.scaleX;
-  const buttonH = (height / 22) * layout.scaleY;
-  changeNameButton.size(buttonW, buttonH);
-  changeNameButton.position(
-    layout.left + width * layout.scaleX - buttonW - (width / 40) * layout.scaleX,
-    layout.top + (height / 40) * layout.scaleY
+function pointInRect(px, py, rectData) {
+  return (
+    px >= rectData.x &&
+    px <= rectData.x + rectData.w &&
+    py >= rectData.y &&
+    py <= rectData.y + rectData.h
   );
 }
 
-function showChangeNameUi(show) {
-  if (changeNameButton) {
-    changeNameButton.style("display", show ? "block" : "none");
+function getPlayerNames() {
+  return Array.from(
+    new Set(scoreStore.rows.map((row) => row.name).filter((name) => name && name.trim().length > 0))
+  ).sort((a, b) => a.localeCompare(b));
+}
+
+function promptForPlayerName() {
+  const seed = player || "";
+  const raw = window.prompt("Enter player name (existing or new):", seed);
+  if (raw === null) return false;
+  const name = raw.trim();
+  if (name.length < 1) return false;
+
+  if (selectExistingPlayer(name)) {
+    return true;
   }
-}
 
-function submitName() {
-  // Create a score row on first valid player name.
-  const name = nameInput.value().trim();
-  if (!name) return;
   player = name;
-  createScoreRow(player);
-  nameInput.value("");
-  if (playerSelect) playerSelect.value("");
-  showNameUi(false);
+  createScoreRow(name);
+  return true;
 }
 
-function refreshPlayerSelect() {
-  if (!playerSelect) return;
-  const previous = playerSelect.value();
-  playerSelect.elt.innerHTML = "";
-  playerSelect.option("-- Select existing player --", "");
-  const names = Array.from(new Set(scoreStore.rows.map((row) => row.name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-  for (const name of names) playerSelect.option(name, name);
-  if (previous && names.includes(previous)) playerSelect.value(previous);
-  else playerSelect.value("");
+function cyclePlayer() {
+  const names = getPlayerNames();
+  if (names.length < 1) {
+    promptForPlayerName();
+    return;
+  }
+
+  const idx = names.indexOf(player);
+  const nextIndex = idx >= 0 ? (idx + 1) % names.length : 0;
+  selectExistingPlayer(names[nextIndex]);
 }
 
 function selectExistingPlayer(name) {
@@ -619,11 +575,10 @@ function selectExistingPlayer(name) {
       scoreStore.activeRowId = scoreStore.rows[i].id;
       saveScores();
       player = name;
-      showNameUi(false);
-      showChangeNameUi(true);
-      return;
+      return true;
     }
   }
+  return false;
 }
 
 function normalizeRow(row) {
@@ -645,7 +600,6 @@ function loadScores() {
   } catch {
     scoreStore = { rows: [], activeRowId: null };
   }
-  refreshPlayerSelect();
 }
 
 function saveScores() { localStorage.setItem(SCORE_KEY, JSON.stringify(scoreStore)); }
@@ -653,7 +607,6 @@ function createScoreRow(name) {
   // Add a new player session row.
   const row = { id: `${Date.now()}_${Math.floor(Math.random() * 1e9)}`, name, timeScores: new Array(MAX_LEVEL + 1).fill(0), lineScores: new Array(MAX_LEVEL + 1).fill(0) };
   scoreStore.rows.push(row); scoreStore.activeRowId = row.id; saveScores();
-  refreshPlayerSelect();
 }
 function getActiveRow() { return scoreStore.rows.find((r) => r.id === scoreStore.activeRowId) || null; }
 function updateCurrentScore(lv, ms, lineCount) {
@@ -768,9 +721,25 @@ function mouseClicked() {
     Checks if a button is clicked and reloads/selects level. This avoids
     accidental reset while drawing because release is handled separately.
   */
+  if (gameMode === 4) {
+    if (pointInRect(mouseX, mouseY, changePlayerButtonRect)) {
+      promptForPlayerName();
+      return;
+    }
+    if (pointInRect(mouseX, mouseY, switchPlayerButtonRect) && getPlayerNames().length > 1) {
+      cyclePlayer();
+      return;
+    }
+  }
+
   if (gameMode === 1 && dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2) loadLevel();
   if ((gameMode === 0 || gameMode === 2) && mouseX < width / 40 + width / 15 && mouseY < height / 20) gameMode = 4;
-  if (mouseY < imgY + imgH && mouseY > imgY - imgH && gameMode === 4 && selectedLevel !== -1) { level = selectedLevel; loadLevel(); gameMode = 0; }
+  if (mouseY < imgY + imgH && mouseY > imgY - imgH && gameMode === 4 && selectedLevel !== -1) {
+    if (player === null && !promptForPlayerName()) return;
+    level = selectedLevel;
+    loadLevel();
+    gameMode = 0;
+  }
 }
 
 function mouseReleased() {
