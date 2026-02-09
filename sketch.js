@@ -56,6 +56,7 @@ let minTime = 0, minLines = 0;
 let playerMinTime = null, playerMinLines = null;
 let player = null;
 let viewportScale = 1;
+let isTouchDevice = false;
 let playerNameFieldRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerPrevButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerNextButtonRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -343,6 +344,8 @@ function setup() {
   buttonW = height / 4;
   const row = getActiveRow();
   if (row) player = row.name;
+  // Detect touch-capable devices to adapt hit targets without changing visuals
+  try { isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0); } catch (e) { isTouchDevice = false; }
 }
 
 function windowResized() {
@@ -409,7 +412,7 @@ function drawPlayMode() {
   noStroke();
   textAlign(CENTER); textSize(height / 30); fill(COLOR_BLACK); text(`${fmtSecs(time)}s`, width / 2, height / 25);
 
-  if (!pointInRect(mouseX, mouseY, getMenuButtonRect())) noCursor();
+  if (!pointInRect(mouseX, mouseY, getMenuButtonRect(true))) noCursor();
   noStroke(); fill(COLOR_GRAY_MID); ellipse(mouseX, mouseY, d, d);
   strokeWeight(d); stroke(COLOR_GRAY_MID, ALPHA_DIM);
   if (mouseIsPressed && linePos.length > 0) {
@@ -429,11 +432,27 @@ function drawPlayMode() {
 
 function drawResetButton() {
   // Draw reset button while in drawing mode with active physics.
-  buttonX = width - height / 15;
-  buttonY = height / 15;
-  buttonW = height / 10;
+  // Use visual rect for drawing, do not change visual size on touch devices
+  const r = getResetButtonRect(false);
+  buttonX = r.x + r.w / 2;
+  buttonY = r.y + r.h / 2;
+  buttonW = r.w;
   testConnection();
   drawRetryIcon(buttonX, buttonY, buttonW, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
+}
+
+function getResetButtonRect(expand = false) {
+  // Center used historically at (width - height/10, height/10) with diameter height/10
+  const centerX = width - height / 10;
+  const centerY = height / 10;
+  const dia = height / 10;
+  const rect = { x: centerX - dia / 2, y: centerY - dia / 2, w: dia, h: dia };
+  if (!expand) return rect;
+  if (isTouchDevice) {
+    const pad = Math.max(20, width * 0.02);
+    return { x: rect.x - pad, y: rect.y - pad, w: rect.w + pad * 2, h: rect.h + pad * 2 };
+  }
+  return rect;
 }
 
 function drawResultMode() {
@@ -702,18 +721,28 @@ function getLevelScrollbarGeometry() {
   };
 }
 
-function getMenuButtonRect() {
+function getMenuButtonRect(expand = false) {
   const w = width / 8;
   const h = height / 16;
   const x = width / 40;
   const y = height / 30;
-  return { x, y, w, h };
+  const rect = { x, y, w, h };
+  if (!expand) return rect;
+  // On touch devices, enlarge only the hit area (not visuals)
+  if (isTouchDevice) {
+    const padX = Math.max(20, width * 0.02);
+    const padY = Math.max(20, height * 0.02);
+    return { x: rect.x - padX, y: rect.y - padY, w: rect.w + padX * 2, h: rect.h + padY * 2 };
+  }
+  return rect;
 }
 
 function drawGlobalMenuButton() {
-  menuButtonRect = getMenuButtonRect();
+  // Use visual rect for drawing, don't expand visuals for touch devices
+  menuButtonRect = getMenuButtonRect(false);
   const { x, y, w, h } = menuButtonRect;
-  const hover = pointInRect(mouseX, mouseY, menuButtonRect);
+  // For hover/hit detection use expanded rect on touch devices
+  const hover = pointInRect(mouseX, mouseY, getMenuButtonRect(true));
   if (hover) cursor(HAND);
   noStroke();
   fill(COLOR_BLACK, hover ? ALPHA_OPAQUE : ALPHA_DIM);
@@ -940,9 +969,10 @@ function keyPressed() {
 
 function mousePressed() {
   // Adds first coordinate to linePos when the mouse is pressed.
-  const menuRect = getMenuButtonRect();
+  const menuRect = getMenuButtonRect(true);
   menuButtonArmed = (gameMode === 0 || gameMode === 1 || gameMode === 2) && pointInRect(mouseX, mouseY, menuRect);
-  resetButtonArmed = gameMode === 1 && dist(mouseX, mouseY, width - height / 10, height / 10) < (height / 10) / 2;
+  const resetRect = getResetButtonRect(true);
+  resetButtonArmed = gameMode === 1 && pointInRect(mouseX, mouseY, resetRect);
   if (gameMode === 1 && (menuButtonArmed || resetButtonArmed)) return;
 
   checkEdge();
@@ -1052,7 +1082,7 @@ function mouseReleased() {
   if (
     (gameMode === 0 || gameMode === 1 || gameMode === 2) &&
     menuButtonArmed &&
-    pointInRect(mouseX, mouseY, getMenuButtonRect())
+    pointInRect(mouseX, mouseY, getMenuButtonRect(true))
   ) {
     enterMenu();
     menuButtonArmed = false;
@@ -1073,13 +1103,31 @@ function mouseReleased() {
       !drewLine &&
       physics &&
       resetButtonArmed &&
-      dist(mouseX, mouseY, width - height / 10, height / 10) < (height / 10) / 2
+      pointInRect(mouseX, mouseY, getResetButtonRect(true))
     ) {
       loadLevel();
     }
   } else if ((gameMode === 0 || gameMode === 2) && player !== null && dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2) loadLevel();
   resetButtonArmed = false;
   menuButtonArmed = false;
+}
+
+function touchStarted() {
+  if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
+    mousePressed();
+    return false;
+  }
+}
+
+function touchEnded() {
+  if (gameMode === 0 || gameMode === 1 || gameMode === 2) {
+    mouseReleased();
+    return false;
+  }
+  if (gameMode === 4) {
+    mouseClicked();
+    return false;
+  }
 }
 
 function checkEdge() {
