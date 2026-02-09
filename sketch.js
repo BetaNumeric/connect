@@ -414,8 +414,11 @@ function drawPlayMode() {
   noStroke();
   textAlign(CENTER); textSize(height / 30); fill(COLOR_BLACK); text(`${fmtSecs(time)}s`, width / 2, height / 25);
 
-  if (!pointInRect(mouseX, mouseY, getMenuButtonRect(true))) noCursor();
-  noStroke(); fill(COLOR_GRAY_MID); ellipse(mouseX, mouseY, d, d);
+  if(!isTouchDevice)
+    {
+      if (!pointInRect(mouseX, mouseY, getMenuButtonRect(true))) noCursor();
+      noStroke(); fill(COLOR_GRAY_MID); ellipse(mouseX, mouseY, d, d);
+    }
   strokeWeight(d); stroke(COLOR_GRAY_MID, ALPHA_DIM);
   if (mouseIsPressed && linePos.length > 0) {
     const l = linePos[linePos.length - 1];
