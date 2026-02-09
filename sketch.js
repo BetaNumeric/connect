@@ -379,14 +379,14 @@ function draw() {
 
   if (gameMode === 0) drawStartMode();
   if (gameMode === 1) drawPlayMode(); else cursor(ARROW);
-  if (gameMode === 1 && physics) drawResetButton();
   if (gameMode === 2) drawResultMode();
+  if ((gameMode === 1 && physics) || (gameMode === 2 && levelUp)) drawResetButton();
   if (gameMode === 0 || gameMode === 1 || gameMode === 2) drawGlobalMenuButton();
   if (gameMode === 4) drawLevelMenu();
   if (gameMode === 5) {
     saveLevelPreview(level);
     if (level < MAX_LEVEL) level++; else { level = 0; gameMode = 0; }
-    loadLevel();
+    loadLevel(false);
   }
 }
 
@@ -434,13 +434,13 @@ function drawPlayMode() {
 
 function drawResetButton() {
   // Draw reset button while in drawing mode with active physics.
-  // Use visual rect for drawing, do not change visual size on touch devices
+  // Use visual rect for drawing, do not change global button variables
   const r = getResetButtonRect(false);
-  buttonX = r.x + r.w / 2;
-  buttonY = r.y + r.h / 2;
-  buttonW = r.w;
-  testConnection();
-  drawRetryIcon(buttonX, buttonY, buttonW, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
+  const rx = r.x + r.w / 2;
+  const ry = r.y + r.h / 2;
+  const rw = r.w;
+  if (gameMode === 1) testConnection();
+  drawRetryIcon(rx, ry, rw, dist(mouseX, mouseY, rx, ry) < rw / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
 }
 
 function getResetButtonRect(expand = false) {
@@ -594,8 +594,10 @@ function drawMenuTopPlayerBar() {
   const names = getPlayerNames();
   const hasPlayer = player !== null;
   const canSwitch = names.length > 1;
-  const barY = height / 18;
+  // Position the player controls centered within the top area of the menu
+  const topAreaH = height / 6;
   const barH = height / 16;
+  const barY = topAreaH / 2;
   const fieldW = canSwitch ? width * 0.42 : width * 0.5;
   const chevW = width * 0.06;
   const delW = width * 0.075;
@@ -974,8 +976,9 @@ function mousePressed() {
   const menuRect = getMenuButtonRect(true);
   menuButtonArmed = (gameMode === 0 || gameMode === 1 || gameMode === 2) && pointInRect(mouseX, mouseY, menuRect);
   const resetRect = getResetButtonRect(true);
-  resetButtonArmed = (gameMode === 1 || gameMode === 2) && pointInRect(mouseX, mouseY, resetRect);
+  resetButtonArmed = (gameMode === 1 || (gameMode === 2 && levelUp)) && pointInRect(mouseX, mouseY, resetRect);
   if (gameMode === 1 && (menuButtonArmed || resetButtonArmed)) return;
+  if (gameMode === 2 && (menuButtonArmed || resetButtonArmed)) return;
 
   checkEdge();
   if (drawPermit && gameMode === 1) linePos.push(createVector(mouseX, mouseY));
@@ -1066,7 +1069,7 @@ function mouseClicked() {
   if (mouseY < imgY + imgH && mouseY > imgY - imgH && gameMode === 4 && selectedLevel !== -1) {
     if (player === null && !promptForPlayerName()) return;
     level = selectedLevel;
-    loadLevel();
+    loadLevel(false);
     gameMode = 0;
   }
 }
@@ -1092,15 +1095,6 @@ function mouseReleased() {
     return;
   }
 
-  // If we're on the result screen, allow the top-right reset/replay button
-  // to restart the level as well.
-  if (gameMode === 2 && resetButtonArmed && pointInRect(mouseX, mouseY, getResetButtonRect(true))) {
-    loadLevel();
-    resetButtonArmed = false;
-    menuButtonArmed = false;
-    return;
-  }
-
   if (gameMode === 1) {
     let drewLine = false;
     if (linePos.length > 0) {
@@ -1116,8 +1110,10 @@ function mouseReleased() {
       resetButtonArmed &&
       pointInRect(mouseX, mouseY, getResetButtonRect(true))
     ) {
-      loadLevel();
+      loadLevel(false);
     }
+  } else if (gameMode === 2 && levelUp && resetButtonArmed && pointInRect(mouseX, mouseY, getResetButtonRect(true))) {
+    loadLevel(false);
   } else if ((gameMode === 0 || gameMode === 2) && player !== null && dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2) loadLevel();
   resetButtonArmed = false;
   menuButtonArmed = false;
@@ -1175,9 +1171,9 @@ function checkEdge() {
   }
 }
 
-function loadLevel() {
+function loadLevel(advance = true) {
   // Deletes all level objects, resets variables, and (re)loads level content.
-  if (gameMode !== 4 && levelUp) level++;
+  if (advance && gameMode !== 4 && levelUp) level++;
   if (level > MAX_LEVEL) { if (player) createScoreRow(player); level = 0; }
 
   for (const o of circles) o.delete(); circles = [];
