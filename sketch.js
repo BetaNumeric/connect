@@ -61,6 +61,7 @@ let viewportScale = 1;
 let playerNameFieldRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerPrevButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerNextButtonRect = { x: 0, y: 0, w: 0, h: 0 };
+let playerDeleteButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let menuButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let menuButtonArmed = false;
 let resetButtonArmed = false;
@@ -535,6 +536,7 @@ function drawMenuTopPlayerBar() {
   const barH = height / 16;
   const fieldW = canSwitch ? width * 0.42 : width * 0.5;
   const chevW = width * 0.06;
+  const delW = width * 0.075;
   const gap = width * 0.012;
   const centerX = width / 2;
   const labelText = hasPlayer ? player : "Set Player Name";
@@ -542,6 +544,9 @@ function drawMenuTopPlayerBar() {
   const fieldCx = centerX;
   const prevCx = fieldCx - fieldW / 2 - gap - chevW / 2;
   const nextCx = fieldCx + fieldW / 2 + gap + chevW / 2;
+  const deleteCx = canSwitch
+    ? nextCx + chevW / 2 + gap + delW / 2
+    : fieldCx + fieldW / 2 + gap + delW / 2;
 
   playerNameFieldRect = {
     x: fieldCx - fieldW / 2,
@@ -554,6 +559,9 @@ function drawMenuTopPlayerBar() {
     : { x: -1, y: -1, w: 0, h: 0 };
   playerNextButtonRect = canSwitch
     ? { x: nextCx - chevW / 2, y: barY - barH / 2, w: chevW, h: barH }
+    : { x: -1, y: -1, w: 0, h: 0 };
+  playerDeleteButtonRect = hasPlayer
+    ? { x: deleteCx - delW / 2, y: barY - barH / 2, w: delW, h: barH }
     : { x: -1, y: -1, w: 0, h: 0 };
 
   noStroke();
@@ -589,6 +597,20 @@ function drawMenuTopPlayerBar() {
     noFill();
     line(nextCx - chevronHalfW, barY - chevronHalfH, nextCx + chevronHalfW, barY);
     line(nextCx + chevronHalfW, barY, nextCx - chevronHalfW, barY + chevronHalfH);
+    noStroke();
+  }
+
+  if (hasPlayer) {
+    const deleteHover = pointInRect(mouseX, mouseY, playerDeleteButtonRect);
+    fill(deleteHover ? color(COLOR_BLACK) : color(COLOR_GRAY_MID));
+    rect(deleteCx, barY, delW, barH, barH * 0.2);
+    stroke(COLOR_WHITE);
+    strokeWeight(Math.max(2, barH * 0.09));
+    noFill();
+    const xHalfW = delW * 0.12;
+    const xHalfH = barH * 0.2;
+    line(deleteCx - xHalfW, barY - xHalfH, deleteCx + xHalfW, barY + xHalfH);
+    line(deleteCx + xHalfW, barY - xHalfH, deleteCx - xHalfW, barY + xHalfH);
     noStroke();
   }
 }
@@ -706,6 +728,29 @@ function cyclePlayer(direction = 1) {
   const idx = names.indexOf(player);
   const nextIndex = idx >= 0 ? (idx + direction + names.length) % names.length : 0;
   selectExistingPlayer(names[nextIndex]);
+}
+
+function deleteCurrentPlayer() {
+  if (!player) return false;
+  if (!window.confirm(`Delete player "${player}" and all saved scores?`)) return false;
+
+  scoreStore.rows = scoreStore.rows.filter((row) => row.name !== player);
+  if (scoreStore.rows.length < 1) {
+    scoreStore.activeRowId = null;
+    player = null;
+    saveScores();
+    return true;
+  }
+
+  const remainingNames = getPlayerNames();
+  if (remainingNames.length > 0) {
+    selectExistingPlayer(remainingNames[0]);
+  } else {
+    scoreStore.activeRowId = scoreStore.rows[0].id;
+    player = scoreStore.rows[0].name;
+    saveScores();
+  }
+  return true;
 }
 
 function selectExistingPlayer(name) {
@@ -937,6 +982,10 @@ function mouseClicked() {
     }
     if (pointInRect(mouseX, mouseY, playerNextButtonRect) && getPlayerNames().length > 1) {
       cyclePlayer(1);
+      return;
+    }
+    if (pointInRect(mouseX, mouseY, playerDeleteButtonRect) && player !== null) {
+      deleteCurrentPlayer();
       return;
     }
   }
