@@ -407,8 +407,10 @@ function drawStartMode() {
 
 function drawPlayMode() {
   // Active gameplay mode with drawing cursor and timer.
-  if (!physics) timeStart = millis(); else testConnection();
+  if (!physics) timeStart = millis();
+  // Always update the current time first so tests use an up-to-date value
   time = millis() - timeStart;
+  if (physics) testConnection();
   noStroke();
   textAlign(CENTER); textSize(height / 30); fill(COLOR_BLACK); text(`${fmtSecs(time)}s`, width / 2, height / 25);
 
@@ -571,7 +573,7 @@ function drawLevelMenu() {
     textSize(imgW / 12); fill(COLOR_WHITE);
     if (minLines > 0 && minTime > 0 && playerMinLines && playerMinTime) {
       text(`${formatFewestScore(playerMinLines, minLines)}\n${formatFastestScore(playerMinTime, minTime)}`, 5 + cardX, 5 + imgY + imgH / 2, imgW - 5, imgH);
-    } else text("Fewest: -\nFastest: -", 5 + cardX, 5 + imgY + imgH / 2, imgW - 5, imgH);
+    } else text("fewest: -\nfastest: -", 5 + cardX, 5 + imgY + imgH / 2, imgW - 5, imgH);
 
     noFill();
     stroke(COLOR_BLACK);
@@ -911,12 +913,12 @@ function sanitizePlayerName(value) {
 }
 
 function formatFewestScore(playerName, lineCount) {
-  return `Fewest: ${playerName} [${lineCount} ${lineCount === 1 ? "line" : "lines"}]`;
+  return `fewest: ${playerName} [${lineCount} ${lineCount === 1 ? "line" : "lines"}]`;
 }
 
 function formatFastestScore(playerName, ms) {
   const sec = Number(fmtSecs(ms));
-  return `Fastest: ${playerName} [${fmtSecs(ms)}s]`;
+  return `fastest: ${playerName} [${fmtSecs(ms)}s]`;
 }
 
 function getCenteredLeftAlignedBlockX(centerX, lines) {
@@ -972,7 +974,7 @@ function mousePressed() {
   const menuRect = getMenuButtonRect(true);
   menuButtonArmed = (gameMode === 0 || gameMode === 1 || gameMode === 2) && pointInRect(mouseX, mouseY, menuRect);
   const resetRect = getResetButtonRect(true);
-  resetButtonArmed = gameMode === 1 && pointInRect(mouseX, mouseY, resetRect);
+  resetButtonArmed = (gameMode === 1 || gameMode === 2) && pointInRect(mouseX, mouseY, resetRect);
   if (gameMode === 1 && (menuButtonArmed || resetButtonArmed)) return;
 
   checkEdge();
@@ -1087,6 +1089,15 @@ function mouseReleased() {
     enterMenu();
     menuButtonArmed = false;
     resetButtonArmed = false;
+    return;
+  }
+
+  // If we're on the result screen, allow the top-right reset/replay button
+  // to restart the level as well.
+  if (gameMode === 2 && resetButtonArmed && pointInRect(mouseX, mouseY, getResetButtonRect(true))) {
+    loadLevel();
+    resetButtonArmed = false;
+    menuButtonArmed = false;
     return;
   }
 
