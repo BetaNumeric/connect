@@ -36,8 +36,6 @@ const CUSTOM_SHAPE_CIRCLE_FIXTURE_DEF = { density: 0.1, friction: 0.2, restituti
 
 let box2d;
 let canvasRenderer;
-// Images for buttons.
-let playImg, retryImg, nextImg;
 // Lists for game objects and effects.
 let circles = [], boxes = [], lines = [], rotors = [], particles = [], cShapes = [];
 // List with coordinates of the currently drawn line and collision test points.
@@ -321,10 +319,7 @@ class Particle {
 }
 
 function preload() {
-  // Load button images and level preview images.
-  playImg = loadImage("data/play.png");
-  retryImg = loadImage("data/retry.png");
-  nextImg = loadImage("data/next.png");
+  // Load level preview images.
   for (let i = 0; i < levelImg.length; i++) {
     levelImg[i] = loadImage(`data/levels/level ${i}.png`, () => {}, () => { levelImg[i] = null; });
   }
@@ -404,8 +399,7 @@ function drawStartMode() {
   if (playerMinLines !== null && minLines !== 0) startScoreLines.push(formatFewestScore(playerMinLines, minLines));
   if (playerMinTime !== null && minTime !== 0) startScoreLines.push(formatFastestScore(playerMinTime, minTime));
   drawCenteredLeftAlignedTextLines(width / 2, height - height / 4, startScoreLines, height / 12);
-  tint(COLOR_WHITE, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? ALPHA_OPAQUE : ALPHA_DIM);
-  if (playImg) image(playImg, buttonX, buttonY, buttonW, buttonW);
+  drawPlayIcon(buttonX, buttonY, buttonW, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
 }
 
 function drawPlayMode() {
@@ -435,12 +429,11 @@ function drawPlayMode() {
 
 function drawResetButton() {
   // Draw reset button while in drawing mode with active physics.
-  buttonX = width - height / 10;
-  buttonY = height / 10;
+  buttonX = width - height / 15;
+  buttonY = height / 15;
   buttonW = height / 10;
   testConnection();
-  tint(COLOR_WHITE, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? ALPHA_OPAQUE : ALPHA_DIM);
-  if (retryImg) image(retryImg, buttonX, buttonY, buttonW, buttonW);
+  drawRetryIcon(buttonX, buttonY, buttonW, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
 }
 
 function drawResultMode() {
@@ -463,16 +456,64 @@ function drawResultMode() {
     text(completeFewestLine, completeScoreLeftX, height - height / 4);
     fill(bestTime ? color(...COLOR_SUCCESS_RGB) : color(COLOR_BLACK));
     text(completeFastestLine, completeScoreLeftX, height - height / 6);
-    tint(COLOR_WHITE, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? ALPHA_OPAQUE : ALPHA_DIM);
-    if (nextImg) image(nextImg, buttonX, buttonY, buttonW, buttonW);
+    drawNextIcon(buttonX, buttonY, buttonW, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
   } else {
     const failScoreLines = [];
     if (minLines !== 0 && playerMinLines !== null) failScoreLines.push(formatFewestScore(playerMinLines, minLines));
     if (minTime !== 0 && playerMinTime !== null) failScoreLines.push(formatFastestScore(playerMinTime, minTime));
     drawCenteredLeftAlignedTextLines(width / 2, height - height / 4, failScoreLines, height / 12);
-    tint(COLOR_WHITE, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? ALPHA_OPAQUE : ALPHA_DIM);
-    if (retryImg) image(retryImg, buttonX, buttonY, buttonW, buttonW);
+    drawRetryIcon(buttonX, buttonY, buttonW, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
   }
+}
+
+function drawPlayTriangle(cx, cy, side) {
+  const h = side * Math.sqrt(3) / 2;
+  triangle(
+    cx - h / 3, cy - side / 2,
+    cx - h / 3, cy + side / 2,
+    cx + (2 * h) / 3, cy
+  );
+}
+
+function drawPlayIcon(x, y, size, shade) {
+  push();
+  translate(x, y);
+  noStroke();
+  fill(shade);
+  const side = size * 0.62;
+  drawPlayTriangle(0, 0, side);
+  pop();
+}
+
+function drawRetryIcon(x, y, size, shade) {
+  push();
+  translate(x, y);
+  rotate(radians(145));
+  noFill();
+  stroke(shade);
+  strokeWeight(Math.max(2, size * 0.08));
+  strokeCap(ROUND);
+  const r = size * 0.3;
+  const a0 = radians(75);
+  const a1 = radians(360);
+  arc(0, 0, r * 2, r * 2, a0, a1);
+  const tipX = cos(a0) * r;
+  const tipY = sin(a0) * r;
+  const ah = size * 0.12;
+  line(tipX, tipY, tipX - ah, tipY - ah );
+  line(tipX, tipY, tipX - ah , tipY + ah);
+  pop();
+}
+
+function drawNextIcon(x, y, size, shade) {
+  push();
+  translate(x, y);
+  noStroke();
+  fill(shade);
+  const side = size * 0.56;
+  drawPlayTriangle(-size * 0.1, 0, side);
+  drawPlayTriangle(size * 0.2, 0, side);
+  pop();
 }
 
 function drawLevelMenu() {
@@ -483,7 +524,7 @@ function drawLevelMenu() {
   noStroke();
   imgW = width / 3; imgH = height / 3; imgX = imgScroll; imgY = height / 2;
   const levelPitch = getLevelCardPitch();
-  const leadingGap = getLevelCardGap();
+  const leadingGap = getLevelCardGap()/2;
   imgScroll = clampLevelScroll(imgScroll);
   if (menuDragMode !== "none") cursor(MOVE);
   else cursor(ARROW);
@@ -665,7 +706,7 @@ function getMenuButtonRect() {
   const w = width / 8;
   const h = height / 16;
   const x = width / 40;
-  const y = height / 40;
+  const y = height / 30;
   return { x, y, w, h };
 }
 
