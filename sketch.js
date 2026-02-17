@@ -1,7 +1,11 @@
-/* global planck */
+/* global planck, CONNECT_LEVEL_DATA */
 const BASE_WIDTH = 1024;
 const BASE_HEIGHT = 768;
-const MAX_LEVEL = 20;
+const LEVEL_INDEX_PATH = "data/levels/index.json";
+const LEVEL_DATA_PATH = "data/levels/levels.json";
+const LEVEL_FILES_DIR = "data/levels";
+const EDITOR_TEST_LEVEL_KEY = "connect_editor_test_level_v1";
+const EDITOR_TEST_QUERY_PARAM = "editor_test";
 const MAX_PLAYER_NAME_LENGTH = 10;
 const SCORE_KEY = "connect_scores_v1";
 const PREVIEW_KEY = "connect_level_preview_";
@@ -23,6 +27,8 @@ const MENU_LEVEL_CARD_GAP_PX = 5;
 const MENU_DRAG_THRESHOLD_PX = 3;
 const MENU_SCROLL_STEP_PX = 100;
 const MENU_SCROLLBAR_BOTTOM_AREA_MIDPOINT = 0.5;
+const LEVEL_PREVIEW_RENDER_WIDTH = Math.round(BASE_WIDTH);
+const LEVEL_PREVIEW_RENDER_HEIGHT = Math.round((LEVEL_PREVIEW_RENDER_WIDTH * BASE_HEIGHT) / BASE_WIDTH);
 
 const PARTICLE_LIFE_FRAMES = 80;
 const PARTICLE_DAMPING = 0.93;
@@ -50,10 +56,13 @@ let buttonX = 0, buttonY = 0, buttonW = 0;
 let level = 0, gameMode = 4;
 let imgX = 0, imgY = 0, imgW = 0, imgH = 0, imgScroll = 0;
 let selectedLevel = -1;
-let levelImg = new Array(MAX_LEVEL + 1).fill(null);
+let levelDefs = [];
+let levelData = null;
+let levelImg = [];
 let timeStart = 0, time = 0, totalLines = 0;
 let minTime = 0, minLines = 0;
 let playerMinTime = null, playerMinLines = null;
+let runSetGlobalTimeRecord = false, runSetGlobalLineRecord = false;
 let player = null;
 let viewportScale = 1;
 let isTouchDevice = false;
@@ -70,6 +79,7 @@ let menuDragStartX = 0;
 let menuDragStartY = 0;
 let menuScrollbarGrabOffsetX = 0;
 let scoreStore = { rows: [], activeRowId: null };
+let editorTestMode = false;
 
 class B2D {
   // Adapter to mimic Processing's Box2D helper API in p5.js.
@@ -91,20 +101,17 @@ class B2D {
 }
 
 class Box {
-  constructor(x, y, w, h, st) {
+  constructor(x, y, w, h, st, a = 0) {
     // Coordinates, size, and static/dynamic mode for a box body.
     this.x = x; this.y = y; this.w = w; this.h = h; this.st = st;
+    this.a = Number(a) || 0;
     this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
-    this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y) });
+    this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
     this.body.createFixture(planck.Box(box2d.pxToW(w / 2), box2d.pxToW(h / 2)), { ...BOX_FIXTURE_DEF });
     this.body.setUserData(this);
   }
   contains(x, y, dia) {
     // Checks if coordinates are inside this box.
-    const pos = box2d.getBodyPos(this.body);
-    if (this.st) {
-      return x + dia / 2 > pos.x - this.w / 2 && x - dia / 2 < pos.x + this.w / 2 && y + dia / 2 > pos.y - this.h / 2 && y - dia / 2 < pos.y + this.h / 2;
-    }
     const p = box2d.p2w(x, y);
     for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
     return false;
@@ -216,11 +223,12 @@ class LineBody {
 }
 
 class CustomShape {
-  constructor(x, y, w, h, e, st) {
+  constructor(x, y, w, h, e, st, a = 0) {
     // Location, size, edges (<=8 polygon, >8 circle), and static/dynamic mode.
     this.x = x; this.y = y; this.w = w; this.h = h; this.e = max(3, e); this.st = st;
     this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
-    this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y) });
+    this.a = Number(a) || 0;
+    this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
     if (this.e <= 8) {
       const verts = [];
       for (let i = 0; i < this.e; i++) {
@@ -262,17 +270,20 @@ class CustomShape {
 }
 
 class Rotor {
-  constructor(x, y, w, h, e, motor) {
+  constructor(x, y, w, h, e, motor, a = 0) {
     // Coordinates and size of the rotating platform/shape.
     this.h = h;
+    this.a = Number(a) || 0;
+    const initialAngle = -radians(this.a);
     this.fixture = new Box(x, y, h / 2, h / 2, true);
     this.platform = null;
     this.shape = null;
     if (e === 4) {
       this.platform = new Box(x, y, w, h, false);
+      this.platform.body.setTransform(this.platform.body.getPosition(), initialAngle);
       box2d.world.createJoint(planck.RevoluteJoint({ motorSpeed: PI, maxMotorTorque: 500, enableMotor: motor }, this.fixture.body, this.platform.body, this.fixture.body.getWorldCenter()));
     } else {
-      this.shape = new CustomShape(x, y, w, h, e, false);
+      this.shape = new CustomShape(x, y, w, h, e, false, this.a);
       box2d.world.createJoint(planck.RevoluteJoint({ motorSpeed: PI, maxMotorTorque: 500, enableMotor: motor }, this.fixture.body, this.shape.body, this.fixture.body.getWorldCenter()));
     }
   }
@@ -320,10 +331,15 @@ class Particle {
 }
 
 function preload() {
-  // Load level preview images.
-  for (let i = 0; i < levelImg.length; i++) {
-    levelImg[i] = loadImage(`data/levels/level ${i}.png`, () => {}, () => { levelImg[i] = null; });
-  }
+  // For direct file:// usage, consume embedded fallback data.
+  const useScriptFallback =
+    typeof window !== "undefined" &&
+    window.location &&
+    window.location.protocol === "file:" &&
+    typeof CONNECT_LEVEL_DATA === "object" &&
+    CONNECT_LEVEL_DATA;
+
+  if (useScriptFallback) levelData = CONNECT_LEVEL_DATA;
 }
 
 function setup() {
@@ -335,6 +351,24 @@ function setup() {
   imageMode(CENTER);
   box2d = new B2D();
   box2d.createWorld();
+
+  editorTestMode = isEditorTestRequested();
+  if (editorTestMode) {
+    const editorData = loadEditorTestLevelData();
+    if (editorData) levelData = editorData;
+    else {
+      console.warn("Editor test mode requested, but no valid test level payload was found.");
+      editorTestMode = false;
+    }
+  }
+
+  const hasJsonLevels = levelData && Array.isArray(levelData.levels) && levelData.levels.length > 0;
+  if (!hasJsonLevels && typeof CONNECT_LEVEL_DATA === "object" && CONNECT_LEVEL_DATA) {
+    levelData = CONNECT_LEVEL_DATA;
+  }
+  applyLoadedLevelData(levelData);
+  generateDefaultPreviews();
+
   loadScores();
   loadStoredPreviews();
   circleR = width / 50;
@@ -346,6 +380,31 @@ function setup() {
   if (row) player = row.name;
   // Detect touch-capable devices to adapt hit targets without changing visuals
   try { isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0); } catch (e) { isTouchDevice = false; }
+
+  if (editorTestMode) {
+    if (!player) player = "Editor Test";
+    gameMode = 1;
+    level = 0;
+    loadLevel(false);
+  }
+
+  const canFetch = typeof window !== "undefined" && window.location && window.location.protocol !== "file:";
+  if (canFetch && !editorTestMode) {
+    reloadLevelDataFromSources()
+      .then((data) => {
+        if (!data || !Array.isArray(data.levels) || data.levels.length < 1) return;
+        levelData = data;
+        applyLoadedLevelData(levelData);
+        generateDefaultPreviews();
+        loadStoredPreviews();
+        scoreStore.rows = scoreStore.rows.map(normalizeRow);
+        if (level > getMaxLevelIndex()) level = 0;
+        console.info(`Loaded ${getLevelCount()} levels from manifest/data files.`);
+      })
+      .catch((err) => {
+        console.warn("Failed to load levels from sources:", err);
+      });
+  }
 }
 
 function windowResized() {
@@ -357,6 +416,289 @@ function fitCanvasToWindow() {
   viewportScale = Math.max(0.1, Math.min(windowWidth / BASE_WIDTH, windowHeight / BASE_HEIGHT));
   canvasRenderer.elt.style.width = `${Math.round(BASE_WIDTH * viewportScale)}px`;
   canvasRenderer.elt.style.height = `${Math.round(BASE_HEIGHT * viewportScale)}px`;
+}
+
+async function fetchJsonNoStore(path) {
+  const resp = await fetch(path, { cache: "no-store" });
+  if (!resp.ok) throw new Error(`${path} -> HTTP ${resp.status}`);
+  return resp.json();
+}
+
+function isEditorTestRequested() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const params = new URLSearchParams(window.location.search || "");
+    return params.get(EDITOR_TEST_QUERY_PARAM) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function loadEditorTestLevelData() {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return null;
+    const raw = window.localStorage.getItem(EDITOR_TEST_LEVEL_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.objects)) return null;
+    return {
+      version: 1,
+      base: { width: BASE_WIDTH, height: BASE_HEIGHT },
+      levels: [{ id: 0, objects: parsed.objects }],
+    };
+  } catch (err) {
+    console.warn("Failed to parse editor test level payload:", err);
+    return null;
+  }
+}
+
+function resolveLevelFilePath(entry) {
+  if (typeof entry !== "string") return null;
+  if (entry.startsWith("http://") || entry.startsWith("https://") || entry.startsWith("/")) return entry;
+  return `${LEVEL_FILES_DIR}/${entry}`;
+}
+
+async function loadLevelDataFromIndex() {
+  const indexData = await fetchJsonNoStore(LEVEL_INDEX_PATH);
+  const refs = Array.isArray(indexData?.levels) ? indexData.levels : [];
+  if (refs.length < 1) throw new Error("index.json has no levels entries");
+
+  const loadedLevels = await Promise.all(refs.map(async (ref, idx) => {
+    let fileRef = "";
+    let fallbackId = idx;
+    if (typeof ref === "string") fileRef = ref;
+    else if (ref && typeof ref === "object") {
+      fileRef = String(ref.file ?? ref.path ?? ref.name ?? "");
+      if (Number.isInteger(ref.id)) fallbackId = ref.id;
+    }
+    const filePath = resolveLevelFilePath(fileRef);
+    if (!filePath) throw new Error(`Invalid level reference at index ${idx}`);
+    const levelFile = await fetchJsonNoStore(filePath);
+    return {
+      id: Number.isInteger(levelFile?.id) ? levelFile.id : fallbackId,
+      objects: Array.isArray(levelFile?.objects) ? levelFile.objects : [],
+    };
+  }));
+
+  return {
+    version: Number(indexData?.version) || 1,
+    base: { width: BASE_WIDTH, height: BASE_HEIGHT },
+    levels: loadedLevels,
+  };
+}
+
+async function reloadLevelDataFromSources() {
+  try {
+    return await loadLevelDataFromIndex();
+  } catch (err) {
+    console.warn(`Failed to load ${LEVEL_INDEX_PATH}:`, err);
+  }
+
+  try {
+    const legacy = await fetchJsonNoStore(LEVEL_DATA_PATH);
+    if (legacy && Array.isArray(legacy.levels) && legacy.levels.length > 0) return legacy;
+    throw new Error("Missing levels array");
+  } catch (err) {
+    console.warn(`Failed to load ${LEVEL_DATA_PATH}:`, err);
+  }
+
+  if (typeof CONNECT_LEVEL_DATA === "object" && CONNECT_LEVEL_DATA) return CONNECT_LEVEL_DATA;
+  return null;
+}
+
+function getLevelCount() { return levelDefs.length; }
+function getMaxLevelIndex() { return Math.max(0, getLevelCount() - 1); }
+
+function applyLoadedLevelData(rawData) {
+  levelDefs = normalizeLevelDefinitions(rawData);
+  if (levelDefs.length < 1) levelDefs = [{ id: 0, objects: [] }];
+  levelImg = new Array(levelDefs.length).fill(null);
+  level = constrain(level, 0, getMaxLevelIndex());
+}
+
+function normalizeLevelDefinitions(rawData) {
+  const sourceLevels = Array.isArray(rawData?.levels) ? rawData.levels : [];
+  const indexed = [];
+  for (let i = 0; i < sourceLevels.length; i++) {
+    const srcLevel = sourceLevels[i];
+    const id = Number.isInteger(srcLevel?.id) && srcLevel.id >= 0 ? srcLevel.id : i;
+    const srcObjects = Array.isArray(srcLevel?.objects) ? srcLevel.objects : [];
+    const objects = [];
+    for (const rawObject of srcObjects) {
+      const obj = normalizeLevelObject(rawObject);
+      if (obj) objects.push(obj);
+    }
+    indexed[id] = { id, objects };
+  }
+  const out = [];
+  for (let i = 0; i < indexed.length; i++) out.push(indexed[i] || { id: i, objects: [] });
+  return out;
+}
+
+function normalizeLevelObject(rawObject) {
+  if (!rawObject || typeof rawObject !== "object") return null;
+  const t = String(rawObject.type || "").toLowerCase();
+  if (t === "circle") {
+    return {
+      type: "circle",
+      x: Number.isFinite(rawObject.x) ? rawObject.x : 0.5,
+      y: Number.isFinite(rawObject.y) ? rawObject.y : 0.5,
+      rScale: Number.isFinite(rawObject.rScale) ? rawObject.rScale : 1,
+      color: rawObject.color === "B" ? "B" : "A",
+    };
+  }
+  if (t === "box") {
+    return {
+      type: "box",
+      x: Number.isFinite(rawObject.x) ? rawObject.x : 0.5,
+      y: Number.isFinite(rawObject.y) ? rawObject.y : 0.5,
+      w: Number.isFinite(rawObject.w) ? rawObject.w : 0.2,
+      h: Number.isFinite(rawObject.h) ? rawObject.h : 0.05,
+      angle: Number.isFinite(rawObject.angle) ? rawObject.angle : 0,
+      static: Boolean(rawObject.static),
+    };
+  }
+  if (t === "shape") {
+    return {
+      type: "shape",
+      x: Number.isFinite(rawObject.x) ? rawObject.x : 0.5,
+      y: Number.isFinite(rawObject.y) ? rawObject.y : 0.5,
+      w: Number.isFinite(rawObject.w) ? rawObject.w : 0.05,
+      h: Number.isFinite(rawObject.h) ? rawObject.h : 0.05,
+      edges: Math.max(3, Number(rawObject.edges) || 6),
+      angle: Number.isFinite(rawObject.angle) ? rawObject.angle : 0,
+      static: Boolean(rawObject.static),
+    };
+  }
+  if (t === "rotor") {
+    return {
+      type: "rotor",
+      x: Number.isFinite(rawObject.x) ? rawObject.x : 0.5,
+      y: Number.isFinite(rawObject.y) ? rawObject.y : 0.5,
+      w: Number.isFinite(rawObject.w) ? rawObject.w : 0.3,
+      h: Number.isFinite(rawObject.h) ? rawObject.h : 0.05,
+      edges: Math.max(3, Number(rawObject.edges) || 4),
+      angle: Number.isFinite(rawObject.angle) ? rawObject.angle : 0,
+      motor: Boolean(rawObject.motor),
+    };
+  }
+  return null;
+}
+
+function generateDefaultPreviews() {
+  // Draw default level previews directly from level geometry.
+  for (let i = 0; i < levelImg.length; i++) {
+    levelImg[i] = renderLevelPreview(levelDefs[i], i);
+  }
+}
+
+function renderLevelPreview(def, index) {
+  const g = createGraphics(LEVEL_PREVIEW_RENDER_WIDTH, LEVEL_PREVIEW_RENDER_HEIGHT);
+  g.pixelDensity(1);
+  g.rectMode(CENTER);
+  g.background(COLOR_WHITE);
+
+  const objects = Array.isArray(def?.objects) ? def.objects : [];
+  const circlesLocal = objects.filter((o) => o.type === "circle");
+  const boxesLocal = objects.filter((o) => o.type === "box");
+  const shapesLocal = objects.filter((o) => o.type === "shape");
+  const rotorsLocal = objects.filter((o) => o.type === "rotor");
+
+  for (const obj of boxesLocal) drawPreviewBox(g, obj);
+  for (const obj of shapesLocal) drawPreviewShape(g, obj);
+  for (const obj of rotorsLocal) drawPreviewRotor(g, obj);
+  for (const obj of circlesLocal) drawPreviewCircle(g, obj);
+
+  // Level label.
+  g.noStroke();
+  g.fill(COLOR_BLACK, 160);
+  g.textAlign(LEFT, TOP);
+  g.textSize(12);
+  g.text(`L${index + 1}`, 6, 4);
+  return g;
+}
+
+function drawPreviewCircle(g, obj) {
+  const x = obj.x * g.width;
+  const y = obj.y * g.height;
+  const r = Math.max(1, obj.rScale * (g.width / 50));
+  g.noStroke();
+  if (obj.color === "B") g.fill(...COLOR_PLAYER_B_RGB);
+  else g.fill(...COLOR_PLAYER_A_RGB);
+  g.ellipse(x, y, r * 2, r * 2);
+}
+
+function drawPreviewBox(g, obj) {
+  const x = obj.x * g.width;
+  const y = obj.y * g.height;
+  const w = obj.w * g.width;
+  const h = obj.h * g.height;
+  const angle = radians(Number(obj.angle) || 0);
+  g.push();
+  g.translate(x, y);
+  g.rotate(angle);
+  g.noStroke();
+  if (obj.static) g.fill(COLOR_GRAY_LIGHT);
+  else g.fill(COLOR_GRAY_MID);
+  g.rect(0, 0, w, h);
+  g.pop();
+}
+
+function drawPreviewShape(g, obj) {
+  const x = obj.x * g.width;
+  const y = obj.y * g.height;
+  const w = obj.w * g.width;
+  const h = obj.h * g.height;
+  const edges = Math.max(3, Number(obj.edges) || 6);
+  const angle = radians(Number(obj.angle) || 0);
+  g.push();
+  g.translate(x, y);
+  g.rotate(angle);
+  g.noStroke();
+  if (obj.static) g.fill(COLOR_GRAY_LIGHT);
+  else g.fill(COLOR_GRAY_MID);
+  drawPreviewCustomShapePath(g, 0, 0, w, h, edges, false);
+  g.pop();
+}
+
+function drawPreviewRotor(g, obj) {
+  const x = obj.x * g.width;
+  const y = obj.y * g.height;
+  const w = obj.w * g.width;
+  const h = obj.h * g.height;
+  const edges = Math.max(3, Number(obj.edges) || 4);
+  const angle = radians(Number(obj.angle) || 0);
+
+  g.push();
+  g.translate(x, y);
+  g.rotate(angle);
+  g.noStroke();
+  g.fill(COLOR_GRAY_MID);
+  drawPreviewCustomShapePath(g, 0, 0, w, h, edges, true);
+  g.pop();
+
+  g.noFill();
+  g.stroke(COLOR_GRAY_LIGHT);
+  g.strokeWeight(2);
+  g.ellipse(x, y, h / 2, h / 2);
+}
+
+function drawPreviewCustomShapePath(g, x, y, w, h, edges, forceBoxOnFour) {
+  if (forceBoxOnFour && edges === 4) {
+    g.rect(x, y, w, h);
+    return;
+  }
+  if (edges <= 8) {
+    g.beginShape();
+    for (let i = 0; i < edges; i++) {
+      const a = radians(i * (360 / edges));
+      g.vertex(x + cos(a) * w, y + sin(a) * h);
+    }
+    g.endShape(CLOSE);
+    return;
+  }
+  const d = w + h;
+  g.ellipse(x, y, d, d);
 }
 
 function draw() {
@@ -384,8 +726,12 @@ function draw() {
   if (gameMode === 0 || gameMode === 1 || gameMode === 2) drawGlobalMenuButton();
   if (gameMode === 4) drawLevelMenu();
   if (gameMode === 5) {
-    saveLevelPreview(level);
-    if (level < MAX_LEVEL) level++; else { level = 0; gameMode = 0; }
+    if (editorTestMode) {
+      level = 0;
+    } else {
+      saveLevelPreview(level);
+      if (level < getMaxLevelIndex()) level++; else { level = 0; gameMode = 0; }
+    }
     loadLevel(false);
   }
 }
@@ -471,8 +817,8 @@ function drawResultMode() {
 
   textAlign(LEFT); textSize(width / 30); calcScore(level);
   if (levelUp) {
-    const bestLine = (minLines === 0 || minLines >= totalLines);
-    const bestTime = (minTime === 0 || minTime >= time);
+    const bestLine = runSetGlobalLineRecord;
+    const bestTime = runSetGlobalTimeRecord;
     const completeFewestLine = `${totalLines} ${totalLines > 1 ? "lines" : "line"}${bestLine ? ` (new record by ${player}!)` : ` (${formatFewestScore(playerMinLines, minLines)})`}`;
     const completeFastestLine = `${fmtSecs(time)}s${bestTime ? ` (new record by ${player}!)` : ` (${formatFastestScore(playerMinTime, minTime)})`}`;
     const completeScoreLeftX = getCenteredLeftAlignedBlockX(width / 2, [completeFewestLine, completeFastestLine]);
@@ -700,8 +1046,8 @@ function getLevelCardPitch() {
 }
 
 function getLevelStripMinScroll() {
-  const stripW = getLevelCardPitch() * (MAX_LEVEL + 1);
-  return width - stripW;
+  const stripW = getLevelCardPitch() * getLevelCount();
+  return Math.min(0, width - stripW);
 }
 
 function clampLevelScroll(value) {
@@ -718,7 +1064,7 @@ function getLevelScrollbarGeometry() {
   const minScroll = getLevelStripMinScroll();
   const handleW = height / 10;
   const handleH = height / 20;
-  const handleCenterX = map(imgScroll, 0, minScroll, trackPadding, width - trackPadding);
+  const handleCenterX = minScroll === 0 ? trackPadding : map(imgScroll, 0, minScroll, trackPadding, width - trackPadding);
   return {
     track: { x: 0, y: trackY - trackH / 2, w: width, h: trackH },
     handle: { x: handleCenterX - handleW / 2, y: trackY - handleH / 2, w: handleW, h: handleH },
@@ -843,9 +1189,10 @@ function selectExistingPlayer(name) {
 }
 
 function normalizeRow(row) {
-  const out = { id: String(row?.id ?? `${Date.now()}_${Math.floor(Math.random() * ID_RANDOM_RANGE)}`), name: sanitizePlayerName(String(row?.name ?? "Player")), timeScores: new Array(MAX_LEVEL + 1).fill(0), lineScores: new Array(MAX_LEVEL + 1).fill(0) };
-  if (Array.isArray(row?.timeScores)) for (let i = 0; i <= MAX_LEVEL; i++) out.timeScores[i] = Number(row.timeScores[i]) || 0;
-  if (Array.isArray(row?.lineScores)) for (let i = 0; i <= MAX_LEVEL; i++) out.lineScores[i] = Number(row.lineScores[i]) || 0;
+  const scoreLen = Math.max(1, getLevelCount());
+  const out = { id: String(row?.id ?? `${Date.now()}_${Math.floor(Math.random() * ID_RANDOM_RANGE)}`), name: sanitizePlayerName(String(row?.name ?? "Player")), timeScores: new Array(scoreLen).fill(0), lineScores: new Array(scoreLen).fill(0) };
+  if (Array.isArray(row?.timeScores)) for (let i = 0; i < scoreLen; i++) out.timeScores[i] = Number(row.timeScores[i]) || 0;
+  if (Array.isArray(row?.lineScores)) for (let i = 0; i < scoreLen; i++) out.lineScores[i] = Number(row.lineScores[i]) || 0;
   return out;
 }
 
@@ -866,7 +1213,8 @@ function loadScores() {
 function saveScores() { localStorage.setItem(SCORE_KEY, JSON.stringify(scoreStore)); }
 function createScoreRow(name) {
   // Add a new player session row.
-  const row = { id: `${Date.now()}_${Math.floor(Math.random() * ID_RANDOM_RANGE)}`, name: sanitizePlayerName(name), timeScores: new Array(MAX_LEVEL + 1).fill(0), lineScores: new Array(MAX_LEVEL + 1).fill(0) };
+  const scoreLen = Math.max(1, getLevelCount());
+  const row = { id: `${Date.now()}_${Math.floor(Math.random() * ID_RANDOM_RANGE)}`, name: sanitizePlayerName(name), timeScores: new Array(scoreLen).fill(0), lineScores: new Array(scoreLen).fill(0) };
   scoreStore.rows.push(row); scoreStore.activeRowId = row.id; saveScores();
 }
 function getActiveRow() { return scoreStore.rows.find((r) => r.id === scoreStore.activeRowId) || null; }
@@ -874,13 +1222,20 @@ function updateCurrentScore(lv, ms, lineCount) {
   // Save current level time and line count for the active row.
   const row = getActiveRow();
   if (!row) return;
-  row.timeScores[lv] = ms;
-  row.lineScores[lv] = lineCount;
+
+  while (row.timeScores.length <= lv) row.timeScores.push(0);
+  while (row.lineScores.length <= lv) row.lineScores.push(0);
+
+  const prevTime = Number(row.timeScores[lv]) || 0;
+  const prevLines = Number(row.lineScores[lv]) || 0;
+
+  if (Number(ms) > 0 && (prevTime === 0 || ms < prevTime)) row.timeScores[lv] = ms;
+  if (Number(lineCount) > 0 && (prevLines === 0 || lineCount < prevLines)) row.lineScores[lv] = lineCount;
   saveScores();
 }
 function calcScore(lv) {
   // Calculate best time and best line count for one level across all rows.
-  lv = constrain(lv, 0, MAX_LEVEL);
+  lv = constrain(lv, 0, getMaxLevelIndex());
   minTime = 0; minLines = 0; playerMinTime = null; playerMinLines = null;
   let t = Infinity, l = Infinity;
   for (const row of scoreStore.rows) {
@@ -896,7 +1251,7 @@ function calcScore(lv) {
 function previewKey(i) { return `${PREVIEW_KEY}${i}`; }
 function loadStoredPreviews() {
   // Load persisted level thumbnails from localStorage.
-  for (let i = 0; i <= MAX_LEVEL; i++) {
+  for (let i = 0; i <= getMaxLevelIndex(); i++) {
     const data = localStorage.getItem(previewKey(i));
     if (data) loadImage(data, (img) => { levelImg[i] = img; }, () => {});
   }
@@ -952,8 +1307,18 @@ function testConnection() {
   const b = box2d.getBodyPos(circles[1].body);
   circles[0].pos = a.copy(); circles[1].pos = b.copy();
   if (p5.Vector.sub(b, a).mag() <= circleR * 2) {
-    updateCurrentScore(level, time, totalLines);
-    saveLevelPreview(level);
+    if (editorTestMode) {
+      // Editor test runs should not update persistent records or previews.
+      runSetGlobalLineRecord = true;
+      runSetGlobalTimeRecord = true;
+    } else {
+      // Compare against pre-run global records, then persist personal bests.
+      calcScore(level);
+      runSetGlobalLineRecord = (minLines === 0 || totalLines < minLines);
+      runSetGlobalTimeRecord = (minTime === 0 || time < minTime);
+      updateCurrentScore(level, time, totalLines);
+      saveLevelPreview(level);
+    }
     circles[0].change(); circles[1].change();
     physics = false;
     const x = a.x - (a.x - b.x) / 2;
@@ -1176,8 +1541,8 @@ function checkEdge() {
 
 function loadLevel(advance = true) {
   // Deletes all level objects, resets variables, and (re)loads level content.
-  if (advance && gameMode !== 4 && levelUp) level++;
-  if (level > MAX_LEVEL) { if (player) createScoreRow(player); level = 0; }
+  if (advance && gameMode !== 4 && levelUp && !editorTestMode) level++;
+  if (level > getMaxLevelIndex()) { if (player && !editorTestMode) createScoreRow(player); level = 0; }
 
   for (const o of circles) o.delete(); circles = [];
   for (const o of boxes) o.delete(); boxes = [];
@@ -1186,6 +1551,8 @@ function loadLevel(advance = true) {
   for (const o of lines) o.delete(); lines = [];
 
   linePos = []; linePosTest = []; totalLines = 0;
+  runSetGlobalTimeRecord = false;
+  runSetGlobalLineRecord = false;
   if (gameMode !== 4) gameMode = 1;
   buildLevel();
   physics = false;
@@ -1218,145 +1585,39 @@ function drawObjects() {
   for (let i = particles.length - 1; i >= 0; i--) { particles[i].move(); particles[i].draw(); if (!particles[i].alive) particles.splice(i, 1); }
 }
 function buildLevel() {
-  // Builds the current level with boxes, circles, shapes, and rotors.
-  switch (level) {
-    case 0:
-      circles.push(new Circle(width / 4, height / 5, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height / 5, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      break;
-    case 1:
-      circles.push(new Circle(width / 4, height - height / 20 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height / 5, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      break;
-    case 2:
-      circles.push(new Circle(width / 4, height - height / 20 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height - height / 20 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      break;
-    case 3:
-      circles.push(new Circle(width / 2, height - height / 20 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle(width / 2, height - height / 2 - height / 40 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      boxes.push(new Box(width / 2, height - height / 2, width / 2, height / 20, true));
-      break;
-    case 4:
-      circles.push(new Circle(width / 5, height / 2 - height / 40 - height / 4, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 5) * 4, height / 2 - height / 40 + height / 4, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      for (let i = 0; i < 5; i++) for (let j = 0; j < 4; j++) cShapes.push(new CustomShape(width / 10 + i * (width / 5), height / 10 + j * (height / 4), circleR * 2, circleR * 2, 6, false));
-      break;
-    case 5:
-      circles.push(new Circle(width / 4, height / 5, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height / 5, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      boxes.push(new Box(width / 2, height - height / 4, width / 5, height / 2, true));
-      break;
-    case 6:
-      circles.push(new Circle(width / 4, height - height / 20 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height - height / 20 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      boxes.push(new Box(width / 2, height / 4, width / 5, height / 2, false));
-      break;
-    case 7:
-      circles.push(new Circle(width / 4, height / 3 - height / 40 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height - height / 20 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      boxes.push(new Box(width / 2 + width / 8, height - height / 3, width - width / 4, height / 20, true));
-      boxes.push(new Box(width / 2 - width / 8, height / 3, width - width / 4, height / 20, true));
-      break;
-    case 8:
-      circles.push(new Circle(width / 4, height - height / 5 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height - height / 5 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width - width / 6, height - height / 10, width / 3, height / 5, true));
-      boxes.push(new Box(width / 6, height - height / 10, width / 3, height / 5, true));
-      boxes.push(new Box(width - width / 9, height - height / 20, width / 2, height / 5, true));
-      boxes.push(new Box(width / 9, height - height / 20, width / 2, height / 5, true));
-      break;
-    case 9:
-      circles.push(new Circle(width / 4, height / 3, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height / 3, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 4, height - height / 10, width / 2, height / 5, true));
-      break;
-    case 10:
-      circles.push(new Circle((width / 6) * 2, height / 2 - height / 40 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 6) * 4, height / 2 - height / 40 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 2, width / 2, height / 20, true));
-      boxes.push(new Box(width / 2, height / 4, width / 30, height / 2, true));
-      break;
-    case 11:
-      circles.push(new Circle(width / 4, height / 2, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height / 2, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height / 2, width / 10, width / 10, true));
-      break;
-    case 12:
-      circles.push(new Circle(width / 2, height / 2 + height / 6 - circleR * 2, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle(width / 2, height / 2 - height / 6 - circleR * 2, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2 + height / 40, height / 2 + height / 6, height / 3, height / 20, true));
-      boxes.push(new Box(width / 2 - height / 40, height / 2 - height / 6, height / 3, height / 20, true));
-      boxes.push(new Box(width / 2 - height / 6, height / 2 + height / 40, height / 20, height / 3, true));
-      boxes.push(new Box(width / 2 + height / 6, height / 2 - height / 15, height / 20, height / 4, true));
-      break;
-    case 13:
-      circles.push(new Circle(width / 2, height / 2 + height / 6 - height / 40 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle(width / 2, height / 2 - height / 6 - height / 40 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height / 2 + height / 6, width / 3, height / 20, true));
-      boxes.push(new Box(width / 2, height / 2 - height / 6, width / 2, height / 20, true));
-      break;
-    case 14:
-      circles.push(new Circle(width / 5, height / 2 + height / 6, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle(width - width / 5, height / 2 - height / 6, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 5, height / 2, width / 2.5, height / 20, true));
-      boxes.push(new Box(width - width / 5, height / 2, width / 2.5, height / 20, true));
-      break;
-    case 15:
-      circles.push(new Circle(width / 3.5, height / 2 - height / 40 - circleR, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle(width - width / 3.5, height / 2 - height / 40 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height / 2 - height / 80, width / 2, height / 40, false));
-      cShapes.push(new CustomShape(width / 2, height, width / 20, height / 2, 4, true));
-      break;
-    case 16:
-      circles.push(new Circle(width / 10, height / 6 + height / 8, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle(width - width / 10, height - height / 20 - circleR, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width - width / 8, height - height / 40, width / 4, height / 20, true));
-      boxes.push(new Box(width / 8, height - height / 40, width / 4, height / 20, true));
-      cShapes.push(new CustomShape(width / 12, height - height / 20, width / 6, height - height / 4, 3, true));
-      break;
-    case 17:
-      circles.push(new Circle(width / 5, height / 3, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 5) * 4, height / 3, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 2, height - height / 40, width, height / 20, true));
-      cShapes.push(new CustomShape(width / 2, height, width / 2, height / 2, 4, true));
-      cShapes.push(new CustomShape(width / 2, height / 5, height / 15, height / 15, 10, false));
-      break;
-    case 18:
-      circles.push(new Circle(width / 5, height / 2 - circleR * 2, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 5) * 4, height / 2 - circleR * 2, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 10, height / 2, width / 4, height / 20, true));
-      boxes.push(new Box(width - width / 10, height / 2, width / 4, height / 20, true));
-      rotors.push(new Rotor(width / 2, height / 2, width / 2, height / 20, 4, false));
-      break;
-    case 19:
-      circles.push(new Circle(width / 5, height / 2 - circleR * 2, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle(width / 2, height - height / 20 - circleR * 2, circleR, color(...COLOR_PLAYER_B_RGB)));
-      boxes.push(new Box(width / 10, height / 2, width / 4, height / 20, true));
-      boxes.push(new Box(width / 2, height - height / 20, width / 6, height / 20, true));
-      boxes.push(new Box(width / 2 - width / 12 + height / 40, height - height / 20 - height / 20, height / 20, height / 10, true));
-      boxes.push(new Box(width / 2 + width / 12 - height / 40, height - height / 20 - height / 20, height / 20, height / 10, true));
-      rotors.push(new Rotor(width / 2, height / 2, width / 2, height / 20, 4, false));
-      break;
-    case MAX_LEVEL:
-      circles.push(new Circle(width / 4, height / 4 - circleR * 2, circleR, color(...COLOR_PLAYER_A_RGB)));
-      circles.push(new Circle((width / 4) * 3, height - height / 4 - circleR * 2, circleR, color(...COLOR_PLAYER_B_RGB)));
-      rotors.push(new Rotor(width / 4, height / 4, width / 2 - height / 20, height / 20, 4, false));
-      rotors.push(new Rotor((width / 4) * 3, height / 4, width / 2 - height / 20, height / 20, 4, false));
-      rotors.push(new Rotor(width / 4, height - height / 4, width / 2 - height / 20, height / 20, 4, false));
-      rotors.push(new Rotor((width / 4) * 3, height - height / 4, width / 2 - height / 20, height / 20, 4, false));
-      break;
-    default:
-      gameMode = 4;
-      break;
+  // Builds the current level from JSON definitions.
+  const def = levelDefs[level];
+  if (!def) {
+    gameMode = 4;
+    return;
+  }
+
+  for (const obj of def.objects) spawnLevelObject(obj);
+}
+
+function spawnLevelObject(obj) {
+  if (!obj || typeof obj !== "object") return;
+  if (obj.type === "circle") {
+    const x = obj.x * width;
+    const y = obj.y * height;
+    const r = Math.max(1, obj.rScale * circleR);
+    const c = obj.color === "B" ? color(...COLOR_PLAYER_B_RGB) : color(...COLOR_PLAYER_A_RGB);
+    circles.push(new Circle(x, y, r, c));
+    return;
+  }
+
+  if (obj.type === "box") {
+    boxes.push(new Box(obj.x * width, obj.y * height, obj.w * width, obj.h * height, Boolean(obj.static), Number(obj.angle) || 0));
+    return;
+  }
+
+  if (obj.type === "shape") {
+    cShapes.push(new CustomShape(obj.x * width, obj.y * height, obj.w * width, obj.h * height, obj.edges, Boolean(obj.static), Number(obj.angle) || 0));
+    return;
+  }
+
+  if (obj.type === "rotor") {
+    rotors.push(new Rotor(obj.x * width, obj.y * height, obj.w * width, obj.h * height, obj.edges, Boolean(obj.motor), Number(obj.angle) || 0));
   }
 }
 

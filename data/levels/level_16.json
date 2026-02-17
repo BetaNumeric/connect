@@ -1,0 +1,47 @@
+{
+  "id": 16,
+  "objects": [
+    {
+      "type": "circle",
+      "x": 0.1,
+      "y": 0.29166667,
+      "rScale": 1,
+      "color": "A"
+    },
+    {
+      "type": "circle",
+      "x": 0.9,
+      "y": 0.92333333,
+      "rScale": 1,
+      "color": "B"
+    },
+    {
+      "type": "box",
+      "x": 0.875,
+      "y": 0.975,
+      "w": 0.25,
+      "h": 0.05,
+      "angle": 0,
+      "static": true
+    },
+    {
+      "type": "box",
+      "x": 0.1875,
+      "y": 0.975,
+      "w": 0.375,
+      "h": 0.05,
+      "angle": 0,
+      "static": true
+    },
+    {
+      "type": "shape",
+      "x": 0.125,
+      "y": 0.95,
+      "w": 0.25,
+      "h": 0.75,
+      "edges": 3,
+      "angle": 0,
+      "static": true
+    }
+  ]
+}

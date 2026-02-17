@@ -1,0 +1,44 @@
+{
+  "id": 18,
+  "objects": [
+    {
+      "type": "circle",
+      "x": 0.2,
+      "y": 0.44666667,
+      "rScale": 1,
+      "color": "A"
+    },
+    {
+      "type": "circle",
+      "x": 0.8,
+      "y": 0.44666667,
+      "rScale": 1,
+      "color": "B"
+    },
+    {
+      "type": "box",
+      "x": 0.1,
+      "y": 0.5,
+      "w": 0.25,
+      "h": 0.05,
+      "static": true
+    },
+    {
+      "type": "box",
+      "x": 0.9,
+      "y": 0.5,
+      "w": 0.25,
+      "h": 0.05,
+      "static": true
+    },
+    {
+      "type": "rotor",
+      "x": 0.5,
+      "y": 0.5,
+      "w": 0.5,
+      "h": 0.05,
+      "edges": 4,
+      "motor": false
+    }
+  ]
+}

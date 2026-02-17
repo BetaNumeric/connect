@@ -1,0 +1,27 @@
+{
+  "id": 11,
+  "objects": [
+    {
+      "type": "circle",
+      "x": 0.25,
+      "y": 0.5,
+      "rScale": 1,
+      "color": "A"
+    },
+    {
+      "type": "circle",
+      "x": 0.75,
+      "y": 0.5,
+      "rScale": 1,
+      "color": "B"
+    },
+    {
+      "type": "box",
+      "x": 0.5,
+      "y": 0.5,
+      "w": 0.1,
+      "h": 0.13333333,
+      "static": true
+    }
+  ]
+}
