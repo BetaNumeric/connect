@@ -47,6 +47,9 @@ const ARC_SIDE_TOP = "top";
 const ARC_SIDE_RIGHT = "right";
 const ARC_SIDE_BOTTOM = "bottom";
 const ARC_SIDE_LEFT = "left";
+const DEFAULT_ROTOR_MOTOR_SPEED_DEG = 180;
+const DEFAULT_ROTOR_MOTOR_DIRECTION = 1;
+const DEFAULT_ROTOR_MOTOR_TORQUE = 1000000000;
 
 let box2d;
 let canvasRenderer;
@@ -146,6 +149,29 @@ function normalizeArcSide(side) {
 
 function clampArcCut(value) {
   return Math.max(0, Math.min(ARC_BOX_MAX_CUT, Number(value) || 0));
+}
+
+function normalizeRotorMotorSpeedDeg(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return DEFAULT_ROTOR_MOTOR_SPEED_DEG;
+  return Math.max(0, Math.abs(raw));
+}
+
+function normalizeRotorMotorDirection(value) {
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (v === "-1" || v === "ccw" || v === "counterclockwise" || v === "counter-clockwise" || v === "left") return -1;
+    if (v === "1" || v === "cw" || v === "clockwise" || v === "right") return 1;
+  }
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return DEFAULT_ROTOR_MOTOR_DIRECTION;
+  return raw < 0 ? -1 : 1;
+}
+
+function normalizeRotorMotorTorque(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return DEFAULT_ROTOR_MOTOR_TORQUE;
+  return Math.max(0, raw);
 }
 
 function getArcNormalSpan(w, h, side) {
@@ -697,7 +723,19 @@ class CustomShape {
 }
 
 class Rotor {
-  constructor(x, y, w, h, e, motor, a = 0, parts = []) {
+  constructor(
+    x,
+    y,
+    w,
+    h,
+    e,
+    motor,
+    a = 0,
+    parts = [],
+    motorSpeedDeg = DEFAULT_ROTOR_MOTOR_SPEED_DEG,
+    motorDirection = DEFAULT_ROTOR_MOTOR_DIRECTION,
+    motorTorque = DEFAULT_ROTOR_MOTOR_TORQUE
+  ) {
     // Coordinates and size of the rotating core plus optional attached parts.
     this.x = x;
     this.y = y;
@@ -706,6 +744,9 @@ class Rotor {
     this.e = max(3, Number(e) || 4);
     this.a = Number(a) || 0;
     this.motor = Boolean(motor);
+    this.motorSpeedDeg = normalizeRotorMotorSpeedDeg(motorSpeedDeg);
+    this.motorDirection = normalizeRotorMotorDirection(motorDirection);
+    this.motorTorque = normalizeRotorMotorTorque(motorTorque);
     this.parts = (Array.isArray(parts) ? parts : [])
       .map(normalizeRigidGroupPart)
       .filter(Boolean);
@@ -721,7 +762,12 @@ class Rotor {
     }
 
     box2d.world.createJoint(planck.RevoluteJoint(
-      { motorSpeed: PI, maxMotorTorque: 1000000000, enableMotor: this.motor },
+      {
+        // Box2D/Planck positive angular velocity appears opposite to our screen-space clockwise label.
+        motorSpeed: -radians(this.motorSpeedDeg) * this.motorDirection,
+        maxMotorTorque: this.motorTorque,
+        enableMotor: this.motor
+      },
       this.fixture.body,
       this.body,
       this.fixture.body.getWorldCenter()
@@ -1158,6 +1204,9 @@ function normalizeLevelObject(rawObject) {
       edges: Math.max(3, Number(rawObject.edges) || 4),
       angle: Number.isFinite(rawObject.angle) ? rawObject.angle : 0,
       motor: Boolean(rawObject.motor),
+      motorSpeed: normalizeRotorMotorSpeedDeg(rawObject.motorSpeed),
+      motorDirection: normalizeRotorMotorDirection(rawObject.motorDirection),
+      motorTorque: normalizeRotorMotorTorque(rawObject.motorTorque),
       parts,
     };
   }
@@ -2430,7 +2479,10 @@ function spawnLevelObject(obj) {
       obj.edges,
       Boolean(obj.motor),
       Number(obj.angle) || 0,
-      partsPx
+      partsPx,
+      normalizeRotorMotorSpeedDeg(obj.motorSpeed),
+      normalizeRotorMotorDirection(obj.motorDirection),
+      normalizeRotorMotorTorque(obj.motorTorque)
     ));
   }
 }
