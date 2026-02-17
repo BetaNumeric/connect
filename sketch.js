@@ -39,11 +39,18 @@ const BOX_FIXTURE_DEF = { density: 0.2, friction: 0.3, restitution: 0.1 };
 const CIRCLE_FIXTURE_DEF = { density: 0.5, friction: 0.2, restitution: 0.1 };
 const DRAWN_LINE_FIXTURE_DEF = { density: 3, friction: 0.2, restitution: 0.01 };
 const CUSTOM_SHAPE_CIRCLE_FIXTURE_DEF = { density: 0.1, friction: 0.2, restitution: 0 };
+const ARC_BOX_FIXTURE_DEF = { density: 0.2, friction: 0.3, restitution: 0.1 };
+const ARC_BOX_SEGMENTS = 28;
+const ARC_BOX_MAX_CUT = 0.95;
+const ARC_SIDE_TOP = "top";
+const ARC_SIDE_RIGHT = "right";
+const ARC_SIDE_BOTTOM = "bottom";
+const ARC_SIDE_LEFT = "left";
 
 let box2d;
 let canvasRenderer;
 // Lists for game objects and effects.
-let circles = [], boxes = [], lines = [], rotors = [], particles = [], cShapes = [];
+let circles = [], boxes = [], arcBoxes = [], lines = [], rotors = [], particles = [], cShapes = [];
 // List with coordinates of the currently drawn line and collision test points.
 let linePos = [], linePosTest = [];
 // Toggle physics, drawing permission, level completion, and debug info.
@@ -125,6 +132,235 @@ class Box {
   draw() {
     const p = box2d.getBodyPos(this.body);
     push(); translate(p.x, p.y); rotate(-this.body.getAngle()); noStroke(); fill(this.c); rect(0, 0, this.w, this.h); pop();
+  }
+}
+
+function normalizeArcSide(side) {
+  const s = String(side || "").toLowerCase();
+  if (s === ARC_SIDE_RIGHT) return ARC_SIDE_RIGHT;
+  if (s === ARC_SIDE_BOTTOM) return ARC_SIDE_BOTTOM;
+  if (s === ARC_SIDE_LEFT) return ARC_SIDE_LEFT;
+  return ARC_SIDE_TOP;
+}
+
+function clampArcCut(value) {
+  return Math.max(0, Math.min(ARC_BOX_MAX_CUT, Number(value) || 0));
+}
+
+function getArcNormalSpan(w, h, side) {
+  const s = normalizeArcSide(side);
+  return s === ARC_SIDE_TOP || s === ARC_SIDE_BOTTOM ? h : w;
+}
+
+function positiveAngleSpan(start, end) {
+  let span = (end - start) % (Math.PI * 2);
+  if (span < 0) span += Math.PI * 2;
+  return span;
+}
+
+function sampleArcThroughPoint(center, radius, startPoint, endPoint, targetPoint, segments = ARC_BOX_SEGMENTS) {
+  const a1 = Math.atan2(startPoint.y - center.y, startPoint.x - center.x);
+  const a2 = Math.atan2(endPoint.y - center.y, endPoint.x - center.x);
+  const ccwSpan = positiveAngleSpan(a1, a2);
+  const cwSpan = ccwSpan - Math.PI * 2;
+  const ccwMid = a1 + ccwSpan / 2;
+  const cwMid = a1 + cwSpan / 2;
+  const ccwPoint = { x: center.x + Math.cos(ccwMid) * radius, y: center.y + Math.sin(ccwMid) * radius };
+  const cwPoint = { x: center.x + Math.cos(cwMid) * radius, y: center.y + Math.sin(cwMid) * radius };
+  const useCCW = dist(ccwPoint.x, ccwPoint.y, targetPoint.x, targetPoint.y) <= dist(cwPoint.x, cwPoint.y, targetPoint.x, targetPoint.y);
+  const span = useCCW ? ccwSpan : cwSpan;
+
+  const steps = Math.max(6, Math.round(segments));
+  const points = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = a1 + (span * i) / steps;
+    points.push({
+      x: center.x + Math.cos(a) * radius,
+      y: center.y + Math.sin(a) * radius,
+    });
+  }
+  return points;
+}
+
+function buildArcBoxLocalPoints(w, h, cut, side, segments = ARC_BOX_SEGMENTS) {
+  const width = Math.max(1, Number(w) || 1);
+  const height = Math.max(1, Number(h) || 1);
+  const s = normalizeArcSide(side);
+  const halfW = width / 2;
+  const halfH = height / 2;
+  const tl = { x: -halfW, y: -halfH };
+  const tr = { x: halfW, y: -halfH };
+  const br = { x: halfW, y: halfH };
+  const bl = { x: -halfW, y: halfH };
+
+  const normalSpan = s === ARC_SIDE_TOP || s === ARC_SIDE_BOTTOM ? height : width;
+  const depth = clampArcCut(cut) * normalSpan;
+  if (depth <= 1e-6) return [tl, tr, br, bl];
+
+  let p1;
+  let p2;
+  let inward;
+  if (s === ARC_SIDE_TOP) {
+    p1 = tl;
+    p2 = tr;
+    inward = { x: 0, y: 1 };
+  } else if (s === ARC_SIDE_RIGHT) {
+    p1 = tr;
+    p2 = br;
+    inward = { x: -1, y: 0 };
+  } else if (s === ARC_SIDE_BOTTOM) {
+    p1 = br;
+    p2 = bl;
+    inward = { x: 0, y: -1 };
+  } else {
+    p1 = bl;
+    p2 = tl;
+    inward = { x: 1, y: 0 };
+  }
+
+  const chord = dist(p1.x, p1.y, p2.x, p2.y);
+  const notchDepth = Math.max(0.0001, Math.min(depth, normalSpan * ARC_BOX_MAX_CUT));
+  const radius = (chord * chord) / (8 * notchDepth) + notchDepth / 2;
+  const centerOffset = radius - notchDepth;
+  const midpoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  const center = {
+    x: midpoint.x - inward.x * centerOffset,
+    y: midpoint.y - inward.y * centerOffset,
+  };
+  const target = {
+    x: midpoint.x + inward.x * notchDepth,
+    y: midpoint.y + inward.y * notchDepth,
+  };
+  const arcPoints = sampleArcThroughPoint(center, radius, p1, p2, target, segments);
+
+  if (s === ARC_SIDE_TOP) return [...arcPoints, br, bl];
+  if (s === ARC_SIDE_RIGHT) return [tl, ...arcPoints, bl];
+  if (s === ARC_SIDE_BOTTOM) return [tl, tr, ...arcPoints];
+  return [tl, tr, br, ...arcPoints.slice(0, -1)];
+}
+
+function polygonAreaSigned(points) {
+  let area = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    area += a.x * b.y - b.x * a.y;
+  }
+  return area / 2;
+}
+
+function pointInTriangle2D(p, a, b, c) {
+  const v0x = c.x - a.x;
+  const v0y = c.y - a.y;
+  const v1x = b.x - a.x;
+  const v1y = b.y - a.y;
+  const v2x = p.x - a.x;
+  const v2y = p.y - a.y;
+  const den = v0x * v1y - v1x * v0y;
+  if (Math.abs(den) < 1e-9) return false;
+  const u = (v2x * v1y - v1x * v2y) / den;
+  const v = (v0x * v2y - v2x * v0y) / den;
+  return u >= 1e-8 && v >= 1e-8 && u + v <= 1 - 1e-8;
+}
+
+function triangulateSimplePolygon(points) {
+  if (!Array.isArray(points) || points.length < 3) return [];
+  const verts = points
+    .map((p) => ({ x: Number(p.x), y: Number(p.y) }))
+    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (verts.length < 3) return [];
+
+  const area = polygonAreaSigned(verts);
+  if (Math.abs(area) < 1e-8) return [];
+  const orientation = area > 0 ? 1 : -1;
+  const indices = verts.map((_v, i) => i);
+  const triangles = [];
+  let guard = 0;
+
+  while (indices.length > 3 && guard < 4000) {
+    guard++;
+    let clipped = false;
+    for (let i = 0; i < indices.length; i++) {
+      const prevIdx = indices[(i - 1 + indices.length) % indices.length];
+      const currIdx = indices[i];
+      const nextIdx = indices[(i + 1) % indices.length];
+      const a = verts[prevIdx];
+      const b = verts[currIdx];
+      const c = verts[nextIdx];
+      const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      if (cross * orientation <= 1e-8) continue;
+
+      let hasInnerPoint = false;
+      for (let j = 0; j < indices.length; j++) {
+        const testIdx = indices[j];
+        if (testIdx === prevIdx || testIdx === currIdx || testIdx === nextIdx) continue;
+        if (pointInTriangle2D(verts[testIdx], a, b, c)) {
+          hasInnerPoint = true;
+          break;
+        }
+      }
+      if (hasInnerPoint) continue;
+
+      triangles.push([a, b, c]);
+      indices.splice(i, 1);
+      clipped = true;
+      break;
+    }
+    if (!clipped) return [];
+  }
+
+  if (indices.length === 3) {
+    triangles.push([verts[indices[0]], verts[indices[1]], verts[indices[2]]]);
+  }
+  return triangles;
+}
+
+class ArcBox {
+  constructor(x, y, w, h, cut, side, st, a = 0) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+    this.cut = clampArcCut(cut);
+    this.side = normalizeArcSide(side);
+    this.st = st;
+    this.a = Number(a) || 0;
+    this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
+    this.localPoints = buildArcBoxLocalPoints(w, h, this.cut, this.side);
+    this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
+    const triangles = triangulateSimplePolygon(this.localPoints);
+    if (triangles.length > 0) {
+      for (const tri of triangles) {
+        const verts = tri.map((v) => box2d.p2w(v.x, v.y));
+        this.body.createFixture(planck.Polygon(verts), { ...ARC_BOX_FIXTURE_DEF });
+      }
+    } else {
+      this.body.createFixture(planck.Box(box2d.pxToW(w / 2), box2d.pxToW(h / 2)), { ...ARC_BOX_FIXTURE_DEF });
+    }
+    this.body.setUserData(this);
+  }
+  contains(x, y) {
+    const p = box2d.p2w(x, y);
+    for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
+    return false;
+  }
+  delete() { box2d.destroy(this.body); }
+  done() {
+    const p = box2d.getBodyPos(this.body);
+    if (p.x < -this.w * 2 || p.x > width + this.w * 2 || p.y > height + this.h * 2) { this.delete(); return true; }
+    return false;
+  }
+  draw() {
+    const p = box2d.getBodyPos(this.body);
+    push();
+    translate(p.x, p.y);
+    rotate(-this.body.getAngle());
+    noStroke();
+    fill(this.c);
+    beginShape();
+    for (const v of this.localPoints) vertex(v.x, v.y);
+    endShape(CLOSE);
+    pop();
   }
 }
 
@@ -558,6 +794,19 @@ function normalizeLevelObject(rawObject) {
       static: Boolean(rawObject.static),
     };
   }
+  if (t === "arcbox") {
+    return {
+      type: "arcbox",
+      x: Number.isFinite(rawObject.x) ? rawObject.x : 0.5,
+      y: Number.isFinite(rawObject.y) ? rawObject.y : 0.5,
+      w: Number.isFinite(rawObject.w) ? rawObject.w : 0.2,
+      h: Number.isFinite(rawObject.h) ? rawObject.h : 0.2,
+      cut: clampArcCut(rawObject.cut),
+      side: normalizeArcSide(rawObject.side),
+      angle: Number.isFinite(rawObject.angle) ? rawObject.angle : 0,
+      static: Boolean(rawObject.static),
+    };
+  }
   if (t === "shape") {
     return {
       type: "shape",
@@ -601,10 +850,12 @@ function renderLevelPreview(def, index) {
   const objects = Array.isArray(def?.objects) ? def.objects : [];
   const circlesLocal = objects.filter((o) => o.type === "circle");
   const boxesLocal = objects.filter((o) => o.type === "box");
+  const arcBoxesLocal = objects.filter((o) => o.type === "arcbox");
   const shapesLocal = objects.filter((o) => o.type === "shape");
   const rotorsLocal = objects.filter((o) => o.type === "rotor");
 
   for (const obj of boxesLocal) drawPreviewBox(g, obj);
+  for (const obj of arcBoxesLocal) drawPreviewArcBox(g, obj);
   for (const obj of shapesLocal) drawPreviewShape(g, obj);
   for (const obj of rotorsLocal) drawPreviewRotor(g, obj);
   for (const obj of circlesLocal) drawPreviewCircle(g, obj);
@@ -658,6 +909,28 @@ function drawPreviewShape(g, obj) {
   if (obj.static) g.fill(COLOR_GRAY_LIGHT);
   else g.fill(COLOR_GRAY_MID);
   drawPreviewCustomShapePath(g, 0, 0, w, h, edges, false);
+  g.pop();
+}
+
+function drawPreviewArcBox(g, obj) {
+  const x = obj.x * g.width;
+  const y = obj.y * g.height;
+  const w = obj.w * g.width;
+  const h = obj.h * g.height;
+  const cut = clampArcCut(obj.cut);
+  const side = normalizeArcSide(obj.side);
+  const angle = radians(Number(obj.angle) || 0);
+  const points = buildArcBoxLocalPoints(w, h, cut, side);
+
+  g.push();
+  g.translate(x, y);
+  g.rotate(angle);
+  g.noStroke();
+  if (obj.static) g.fill(COLOR_GRAY_LIGHT);
+  else g.fill(COLOR_GRAY_MID);
+  g.beginShape();
+  for (const p of points) g.vertex(p.x, p.y);
+  g.endShape(CLOSE);
   g.pop();
 }
 
@@ -1525,6 +1798,10 @@ function checkEdge() {
     if (b.contains(mouseX, mouseY, d)) drawPermit = false;
     for (const t of linePosTest) if (b.contains(t.x, t.y, d)) drawPermit = false;
   }
+  for (const a of arcBoxes) {
+    if (a.contains(mouseX, mouseY, d)) drawPermit = false;
+    for (const t of linePosTest) if (a.contains(t.x, t.y, d)) drawPermit = false;
+  }
   for (const c of circles) {
     if (c.contains(mouseX, mouseY, d)) drawPermit = false;
     for (const t of linePosTest) if (c.contains(t.x, t.y, d)) drawPermit = false;
@@ -1546,6 +1823,7 @@ function loadLevel(advance = true) {
 
   for (const o of circles) o.delete(); circles = [];
   for (const o of boxes) o.delete(); boxes = [];
+  for (const o of arcBoxes) o.delete(); arcBoxes = [];
   for (const o of cShapes) o.delete(); cShapes = [];
   for (const o of rotors) o.delete(); rotors = [];
   for (const o of lines) o.delete(); lines = [];
@@ -1565,6 +1843,7 @@ function drawObjects() {
     explosion particles. Remove objects when deleted/out of bounds.
   */
   for (let i = boxes.length - 1; i >= 0; i--) { boxes[i].draw(); if (boxes[i].done()) boxes.splice(i, 1); }
+  for (let i = arcBoxes.length - 1; i >= 0; i--) { arcBoxes[i].draw(); if (arcBoxes[i].done()) arcBoxes.splice(i, 1); }
   for (let i = circles.length - 1; i >= 0; i--) {
     circles[i].draw();
     if (circles[i].done()) {
@@ -1608,6 +1887,20 @@ function spawnLevelObject(obj) {
 
   if (obj.type === "box") {
     boxes.push(new Box(obj.x * width, obj.y * height, obj.w * width, obj.h * height, Boolean(obj.static), Number(obj.angle) || 0));
+    return;
+  }
+
+  if (obj.type === "arcbox") {
+    arcBoxes.push(new ArcBox(
+      obj.x * width,
+      obj.y * height,
+      obj.w * width,
+      obj.h * height,
+      clampArcCut(obj.cut),
+      normalizeArcSide(obj.side),
+      Boolean(obj.static),
+      Number(obj.angle) || 0
+    ));
     return;
   }
 
