@@ -40,6 +40,7 @@ const CIRCLE_FIXTURE_DEF = { density: 0.5, friction: 0.2, restitution: 0.1 };
 const DRAWN_LINE_FIXTURE_DEF = { density: 3, friction: 0.2, restitution: 0.01 };
 const CUSTOM_SHAPE_CIRCLE_FIXTURE_DEF = { density: 0.1, friction: 0.2, restitution: 0 };
 const ARC_BOX_FIXTURE_DEF = { density: 0.2, friction: 0.3, restitution: 0.1 };
+const RIGID_GROUP_FIXTURE_DEF = { density: 0.2, friction: 0.3, restitution: 0.1 };
 const ARC_BOX_SEGMENTS = 28;
 const ARC_BOX_MAX_CUT = 0.95;
 const ARC_SIDE_TOP = "top";
@@ -50,7 +51,7 @@ const ARC_SIDE_LEFT = "left";
 let box2d;
 let canvasRenderer;
 // Lists for game objects and effects.
-let circles = [], boxes = [], arcBoxes = [], lines = [], rotors = [], particles = [], cShapes = [];
+let circles = [], boxes = [], arcBoxes = [], rigidGroups = [], lines = [], rotors = [], particles = [], cShapes = [];
 // List with coordinates of the currently drawn line and collision test points.
 let linePos = [], linePosTest = [];
 // Toggle physics, drawing permission, level completion, and debug info.
@@ -364,6 +365,196 @@ class ArcBox {
   }
 }
 
+function normalizeRigidGroupPart(rawPart) {
+  if (!rawPart || typeof rawPart !== "object") return null;
+  const t = String(rawPart.type || "").toLowerCase();
+  const rawW = Number(rawPart.w);
+  const rawH = Number(rawPart.h);
+  const w = Math.max(1e-6, Number.isFinite(rawW) ? Math.abs(rawW) : 0.2);
+  const h = Math.max(1e-6, Number.isFinite(rawH) ? Math.abs(rawH) : 0.05);
+  if (t === "box") {
+    return {
+      type: "box",
+      x: Number.isFinite(rawPart.x) ? rawPart.x : 0,
+      y: Number.isFinite(rawPart.y) ? rawPart.y : 0,
+      w,
+      h,
+      angle: Number.isFinite(rawPart.angle) ? rawPart.angle : 0,
+    };
+  }
+  if (t === "arcbox") {
+    return {
+      type: "arcbox",
+      x: Number.isFinite(rawPart.x) ? rawPart.x : 0,
+      y: Number.isFinite(rawPart.y) ? rawPart.y : 0,
+      w,
+      h,
+      cut: clampArcCut(rawPart.cut),
+      side: normalizeArcSide(rawPart.side),
+      angle: Number.isFinite(rawPart.angle) ? rawPart.angle : 0,
+    };
+  }
+  if (t === "shape") {
+    return {
+      type: "shape",
+      x: Number.isFinite(rawPart.x) ? rawPart.x : 0,
+      y: Number.isFinite(rawPart.y) ? rawPart.y : 0,
+      w,
+      h,
+      edges: Math.max(3, Number(rawPart.edges) || 6),
+      angle: Number.isFinite(rawPart.angle) ? rawPart.angle : 0,
+    };
+  }
+  return null;
+}
+
+function rotatePointXY(x, y, angleRad) {
+  const c = Math.cos(angleRad);
+  const s = Math.sin(angleRad);
+  return { x: x * c - y * s, y: x * s + y * c };
+}
+
+function rigidGroupPartRadiusPx(part) {
+  if (!part) return 0;
+  const px = Number(part.x) || 0;
+  const py = Number(part.y) || 0;
+  let localR = 0;
+  if (part.type === "box" || part.type === "arcbox") {
+    localR = Math.hypot((Number(part.w) || 0) / 2, (Number(part.h) || 0) / 2);
+  } else if (part.type === "shape") {
+    const e = Math.max(3, Number(part.edges) || 6);
+    if (e > 8) localR = (Number(part.w) + Number(part.h)) / 2;
+    else localR = Math.hypot(Number(part.w) || 0, Number(part.h) || 0);
+  }
+  return Math.hypot(px, py) + localR;
+}
+
+function drawRigidGroupPart(part) {
+  push();
+  translate(part.x, part.y);
+  rotate(radians(Number(part.angle) || 0));
+  if (part.type === "box") {
+    rect(0, 0, part.w, part.h);
+    pop();
+    return;
+  }
+  if (part.type === "arcbox") {
+    const pts = buildArcBoxLocalPoints(part.w, part.h, part.cut, part.side);
+    beginShape();
+    for (const p of pts) vertex(p.x, p.y);
+    endShape(CLOSE);
+    pop();
+    return;
+  }
+  if (part.type === "shape") {
+    const e = Math.max(3, Number(part.edges) || 6);
+    if (e <= 8) {
+      beginShape();
+      for (let i = 0; i < e; i++) {
+        const a = radians(i * (360 / e));
+        vertex(cos(a) * part.w, sin(a) * part.h);
+      }
+      endShape(CLOSE);
+    } else {
+      ellipse(0, 0, part.w + part.h, part.w + part.h);
+    }
+  }
+  pop();
+}
+
+class RigidGroup {
+  constructor(x, y, parts, st, a = 0) {
+    this.x = x;
+    this.y = y;
+    this.st = Boolean(st);
+    this.a = Number(a) || 0;
+    this.c = this.st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
+    this.parts = (Array.isArray(parts) ? parts : [])
+      .map(normalizeRigidGroupPart)
+      .filter(Boolean);
+    this.boundR = 0;
+    for (const part of this.parts) this.boundR = Math.max(this.boundR, rigidGroupPartRadiusPx(part));
+    if (this.boundR <= 0) this.boundR = 20;
+
+    this.body = box2d.world.createBody({ type: this.st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
+
+    for (const part of this.parts) {
+      if (part.type === "box") {
+        const center = box2d.p2w(part.x, part.y);
+        this.body.createFixture(
+          planck.Box(box2d.pxToW(part.w / 2), box2d.pxToW(part.h / 2), center, -radians(Number(part.angle) || 0)),
+          { ...RIGID_GROUP_FIXTURE_DEF }
+        );
+        continue;
+      }
+
+      if (part.type === "arcbox") {
+        const local = buildArcBoxLocalPoints(part.w, part.h, part.cut, part.side);
+        const partAngle = radians(Number(part.angle) || 0);
+        const transformed = local.map((p) => {
+          const r = rotatePointXY(p.x, p.y, partAngle);
+          return { x: r.x + part.x, y: r.y + part.y };
+        });
+        const tris = triangulateSimplePolygon(transformed);
+        if (tris.length > 0) {
+          for (const tri of tris) {
+            const verts = tri.map((v) => box2d.p2w(v.x, v.y));
+            this.body.createFixture(planck.Polygon(verts), { ...RIGID_GROUP_FIXTURE_DEF });
+          }
+        }
+        continue;
+      }
+
+      if (part.type === "shape") {
+        const e = Math.max(3, Number(part.edges) || 6);
+        if (e <= 8) {
+          const verts = [];
+          const partAngle = radians(Number(part.angle) || 0);
+          for (let i = 0; i < e; i++) {
+            const a = radians(i * (360 / e));
+            const vx = cos(a) * part.w;
+            const vy = sin(a) * part.h;
+            const r = rotatePointXY(vx, vy, partAngle);
+            verts.push(box2d.p2w(r.x + part.x, r.y + part.y));
+          }
+          this.body.createFixture(planck.Polygon(verts), { ...RIGID_GROUP_FIXTURE_DEF });
+        } else {
+          const center = box2d.p2w(part.x, part.y);
+          this.body.createFixture(planck.Circle(center, box2d.pxToW((part.w + part.h) / 2)), { ...RIGID_GROUP_FIXTURE_DEF });
+        }
+      }
+    }
+
+    // Fallback in case fixtures failed to build.
+    if (!this.body.getFixtureList()) {
+      this.body.createFixture(planck.Box(box2d.pxToW(10), box2d.pxToW(10)), { ...RIGID_GROUP_FIXTURE_DEF });
+    }
+
+    this.body.setUserData(this);
+  }
+  contains(x, y) {
+    const p = box2d.p2w(x, y);
+    for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
+    return false;
+  }
+  delete() { box2d.destroy(this.body); }
+  done() {
+    const p = box2d.getBodyPos(this.body);
+    if (p.x < -this.boundR * 2 || p.x > width + this.boundR * 2 || p.y > height + this.boundR * 2) { this.delete(); return true; }
+    return false;
+  }
+  draw() {
+    const p = box2d.getBodyPos(this.body);
+    push();
+    translate(p.x, p.y);
+    rotate(-this.body.getAngle());
+    noStroke();
+    fill(this.c);
+    for (const part of this.parts) drawRigidGroupPart(part);
+    pop();
+  }
+}
+
 class Circle {
   constructor(x, y, r, c) {
     // Coordinates, radius, and color for a dynamic circle body.
@@ -506,36 +697,152 @@ class CustomShape {
 }
 
 class Rotor {
-  constructor(x, y, w, h, e, motor, a = 0) {
-    // Coordinates and size of the rotating platform/shape.
+  constructor(x, y, w, h, e, motor, a = 0, parts = []) {
+    // Coordinates and size of the rotating core plus optional attached parts.
+    this.x = x;
+    this.y = y;
+    this.w = w;
     this.h = h;
+    this.e = max(3, Number(e) || 4);
     this.a = Number(a) || 0;
+    this.motor = Boolean(motor);
+    this.parts = (Array.isArray(parts) ? parts : [])
+      .map(normalizeRigidGroupPart)
+      .filter(Boolean);
+
     const initialAngle = -radians(this.a);
     this.fixture = new Box(x, y, h / 2, h / 2, true);
-    this.platform = null;
-    this.shape = null;
-    if (e === 4) {
-      this.platform = new Box(x, y, w, h, false);
-      this.platform.body.setTransform(this.platform.body.getPosition(), initialAngle);
-      box2d.world.createJoint(planck.RevoluteJoint({ motorSpeed: PI, maxMotorTorque: 500, enableMotor: motor }, this.fixture.body, this.platform.body, this.fixture.body.getWorldCenter()));
-    } else {
-      this.shape = new CustomShape(x, y, w, h, e, false, this.a);
-      box2d.world.createJoint(planck.RevoluteJoint({ motorSpeed: PI, maxMotorTorque: 500, enableMotor: motor }, this.fixture.body, this.shape.body, this.fixture.body.getWorldCenter()));
+    this.body = box2d.world.createBody({ type: "dynamic", position: box2d.p2w(x, y), angle: initialAngle });
+
+    this.addCoreFixture();
+    for (const part of this.parts) this.addPartFixture(part);
+    if (!this.body.getFixtureList()) {
+      this.body.createFixture(planck.Box(box2d.pxToW(10), box2d.pxToW(10)), { ...RIGID_GROUP_FIXTURE_DEF });
+    }
+
+    box2d.world.createJoint(planck.RevoluteJoint(
+      { motorSpeed: PI, maxMotorTorque: 1000000000, enableMotor: this.motor },
+      this.fixture.body,
+      this.body,
+      this.fixture.body.getWorldCenter()
+    ));
+  }
+
+  addCoreFixture() {
+    if (this.e === 4) {
+      this.body.createFixture(planck.Box(box2d.pxToW(this.w / 2), box2d.pxToW(this.h / 2)), { ...RIGID_GROUP_FIXTURE_DEF });
+      return;
+    }
+    if (this.e <= 8) {
+      const verts = [];
+      for (let i = 0; i < this.e; i++) {
+        const a = radians(i * (360 / this.e));
+        verts.push(box2d.p2w(cos(a) * this.w, sin(a) * this.h));
+      }
+      this.body.createFixture(planck.Polygon(verts), { ...RIGID_GROUP_FIXTURE_DEF });
+      return;
+    }
+    this.body.createFixture(planck.Circle(box2d.pxToW((this.w + this.h) / 2)), { ...RIGID_GROUP_FIXTURE_DEF });
+  }
+
+  addPartFixture(part) {
+    if (part.type === "box") {
+      const center = box2d.p2w(part.x, part.y);
+      this.body.createFixture(
+        planck.Box(box2d.pxToW(part.w / 2), box2d.pxToW(part.h / 2), center, -radians(Number(part.angle) || 0)),
+        { ...RIGID_GROUP_FIXTURE_DEF }
+      );
+      return;
+    }
+
+    if (part.type === "arcbox") {
+      const local = buildArcBoxLocalPoints(part.w, part.h, part.cut, part.side);
+      const partAngle = radians(Number(part.angle) || 0);
+      const transformed = local.map((p) => {
+        const r = rotatePointXY(p.x, p.y, partAngle);
+        return { x: r.x + part.x, y: r.y + part.y };
+      });
+      const tris = triangulateSimplePolygon(transformed);
+      if (tris.length > 0) {
+        for (const tri of tris) {
+          const verts = tri.map((v) => box2d.p2w(v.x, v.y));
+          this.body.createFixture(planck.Polygon(verts), { ...RIGID_GROUP_FIXTURE_DEF });
+        }
+      }
+      return;
+    }
+
+    if (part.type === "shape") {
+      const e = Math.max(3, Number(part.edges) || 6);
+      if (e <= 8) {
+        const verts = [];
+        const partAngle = radians(Number(part.angle) || 0);
+        for (let i = 0; i < e; i++) {
+          const a = radians(i * (360 / e));
+          const vx = cos(a) * part.w;
+          const vy = sin(a) * part.h;
+          const r = rotatePointXY(vx, vy, partAngle);
+          verts.push(box2d.p2w(r.x + part.x, r.y + part.y));
+        }
+        this.body.createFixture(planck.Polygon(verts), { ...RIGID_GROUP_FIXTURE_DEF });
+      } else {
+        const center = box2d.p2w(part.x, part.y);
+        this.body.createFixture(planck.Circle(center, box2d.pxToW((part.w + part.h) / 2)), { ...RIGID_GROUP_FIXTURE_DEF });
+      }
     }
   }
+
   contains(x, y, dia) {
-    // Checks if coordinates are inside this rotor.
-    if (this.platform) return this.platform.contains(x, y, dia);
-    if (this.shape) return this.shape.contains(x, y);
+    // Checks if coordinates are inside this rotor's fixtures.
+    const samples = [{ x, y }];
+    const r = (Number(dia) || 0) / 2;
+    if (r > 0) {
+      const d = r * 0.7071;
+      samples.push({ x: x - r, y }, { x: x + r, y }, { x, y: y - r }, { x, y: y + r });
+      samples.push({ x: x - d, y: y - d }, { x: x + d, y: y - d }, { x: x - d, y: y + d }, { x: x + d, y: y + d });
+    }
+    for (const s of samples) {
+      const p = box2d.p2w(s.x, s.y);
+      for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
+    }
     return false;
   }
-  delete() { this.fixture.delete(); if (this.platform) this.platform.delete(); if (this.shape) this.shape.delete(); }
+
+  delete() {
+    if (this.fixture) this.fixture.delete();
+    if (this.body) box2d.destroy(this.body);
+  }
   done() { return false; }
   draw() {
-    if (this.platform) this.platform.draw();
-    if (this.shape) this.shape.draw();
+    const p = box2d.getBodyPos(this.body);
+    push();
+    translate(p.x, p.y);
+    rotate(-this.body.getAngle());
+    noStroke();
+    fill(COLOR_GRAY_MID);
+    if (this.e === 4) {
+      rect(0, 0, this.w, this.h);
+    } else if (this.e <= 8) {
+      beginShape();
+      for (let i = 0; i < this.e; i++) {
+        const a = radians(i * (360 / this.e));
+        vertex(cos(a) * this.w, sin(a) * this.h);
+      }
+      endShape(CLOSE);
+    } else {
+      ellipse(0, 0, this.w + this.h, this.w + this.h);
+    }
+
+    for (const part of this.parts) drawRigidGroupPart(part);
+    pop();
+
     const a = box2d.w2p(this.fixture.body.getWorldCenter());
-    noFill(); strokeWeight(5); stroke(COLOR_GRAY_LIGHT); ellipse(a.x, a.y, this.h / 2, this.h / 2);
+    if (this.motor) {
+      const spin = degrees(-this.body.getAngle());
+      drawRotorHubGear(a.x, a.y, this.h / 4, spin);
+    } else {
+      drawRotorHubCircle(a.x, a.y, this.h / 4);
+    }
   }
 }
 
@@ -807,6 +1114,22 @@ function normalizeLevelObject(rawObject) {
       static: Boolean(rawObject.static),
     };
   }
+  if (t === "rigid_group") {
+    const rawParts = Array.isArray(rawObject.parts) ? rawObject.parts : [];
+    const parts = [];
+    for (const rawPart of rawParts) {
+      const part = normalizeRigidGroupPart(rawPart);
+      if (part) parts.push(part);
+    }
+    return {
+      type: "rigid_group",
+      x: Number.isFinite(rawObject.x) ? rawObject.x : 0.5,
+      y: Number.isFinite(rawObject.y) ? rawObject.y : 0.5,
+      angle: Number.isFinite(rawObject.angle) ? rawObject.angle : 0,
+      static: Boolean(rawObject.static),
+      parts,
+    };
+  }
   if (t === "shape") {
     return {
       type: "shape",
@@ -820,6 +1143,12 @@ function normalizeLevelObject(rawObject) {
     };
   }
   if (t === "rotor") {
+    const rawParts = Array.isArray(rawObject.parts) ? rawObject.parts : [];
+    const parts = [];
+    for (const rawPart of rawParts) {
+      const part = normalizeRigidGroupPart(rawPart);
+      if (part) parts.push(part);
+    }
     return {
       type: "rotor",
       x: Number.isFinite(rawObject.x) ? rawObject.x : 0.5,
@@ -829,6 +1158,7 @@ function normalizeLevelObject(rawObject) {
       edges: Math.max(3, Number(rawObject.edges) || 4),
       angle: Number.isFinite(rawObject.angle) ? rawObject.angle : 0,
       motor: Boolean(rawObject.motor),
+      parts,
     };
   }
   return null;
@@ -851,11 +1181,13 @@ function renderLevelPreview(def, index) {
   const circlesLocal = objects.filter((o) => o.type === "circle");
   const boxesLocal = objects.filter((o) => o.type === "box");
   const arcBoxesLocal = objects.filter((o) => o.type === "arcbox");
+  const rigidGroupsLocal = objects.filter((o) => o.type === "rigid_group");
   const shapesLocal = objects.filter((o) => o.type === "shape");
   const rotorsLocal = objects.filter((o) => o.type === "rotor");
 
   for (const obj of boxesLocal) drawPreviewBox(g, obj);
   for (const obj of arcBoxesLocal) drawPreviewArcBox(g, obj);
+  for (const obj of rigidGroupsLocal) drawPreviewRigidGroup(g, obj);
   for (const obj of shapesLocal) drawPreviewShape(g, obj);
   for (const obj of rotorsLocal) drawPreviewRotor(g, obj);
   for (const obj of circlesLocal) drawPreviewCircle(g, obj);
@@ -934,6 +1266,47 @@ function drawPreviewArcBox(g, obj) {
   g.pop();
 }
 
+function drawPreviewRigidGroup(g, obj) {
+  const x = obj.x * g.width;
+  const y = obj.y * g.height;
+  const angle = radians(Number(obj.angle) || 0);
+  const parts = Array.isArray(obj.parts) ? obj.parts : [];
+
+  g.push();
+  g.translate(x, y);
+  g.rotate(angle);
+  g.noStroke();
+  if (obj.static) g.fill(COLOR_GRAY_LIGHT);
+  else g.fill(COLOR_GRAY_MID);
+
+  for (const rawPart of parts) {
+    const part = normalizeRigidGroupPart(rawPart);
+    if (!part) continue;
+    const px = part.x * g.width;
+    const py = part.y * g.height;
+    const pw = part.w * g.width;
+    const ph = part.h * g.height;
+    const pa = radians(Number(part.angle) || 0);
+
+    g.push();
+    g.translate(px, py);
+    g.rotate(pa);
+    if (part.type === "box") {
+      g.rect(0, 0, pw, ph);
+    } else if (part.type === "arcbox") {
+      const pts = buildArcBoxLocalPoints(pw, ph, part.cut, part.side);
+      g.beginShape();
+      for (const p of pts) g.vertex(p.x, p.y);
+      g.endShape(CLOSE);
+    } else if (part.type === "shape") {
+      drawPreviewCustomShapePath(g, 0, 0, pw, ph, Math.max(3, Number(part.edges) || 6), false);
+    }
+    g.pop();
+  }
+
+  g.pop();
+}
+
 function drawPreviewRotor(g, obj) {
   const x = obj.x * g.width;
   const y = obj.y * g.height;
@@ -941,6 +1314,7 @@ function drawPreviewRotor(g, obj) {
   const h = obj.h * g.height;
   const edges = Math.max(3, Number(obj.edges) || 4);
   const angle = radians(Number(obj.angle) || 0);
+  const parts = Array.isArray(obj.parts) ? obj.parts : [];
 
   g.push();
   g.translate(x, y);
@@ -948,12 +1322,37 @@ function drawPreviewRotor(g, obj) {
   g.noStroke();
   g.fill(COLOR_GRAY_MID);
   drawPreviewCustomShapePath(g, 0, 0, w, h, edges, true);
+
+  for (const rawPart of parts) {
+    const part = normalizeRigidGroupPart(rawPart);
+    if (!part) continue;
+    const px = part.x * g.width;
+    const py = part.y * g.height;
+    const pw = part.w * g.width;
+    const ph = part.h * g.height;
+    const pa = radians(Number(part.angle) || 0);
+    g.push();
+    g.translate(px, py);
+    g.rotate(pa);
+    if (part.type === "box") {
+      g.rect(0, 0, pw, ph);
+    } else if (part.type === "arcbox") {
+      const pts = buildArcBoxLocalPoints(pw, ph, part.cut, part.side);
+      g.beginShape();
+      for (const p of pts) g.vertex(p.x, p.y);
+      g.endShape(CLOSE);
+    } else if (part.type === "shape") {
+      drawPreviewCustomShapePath(g, 0, 0, pw, ph, Math.max(3, Number(part.edges) || 6), false);
+    }
+    g.pop();
+  }
   g.pop();
 
-  g.noFill();
-  g.stroke(COLOR_GRAY_LIGHT);
-  g.strokeWeight(2);
-  g.ellipse(x, y, h / 2, h / 2);
+  if (Boolean(obj.motor)) {
+    drawPreviewRotorHubGear(g, x, y, h / 4, Number(obj.angle) || 0);
+  } else {
+    drawPreviewRotorHubCircle(g, x, y, h / 4);
+  }
 }
 
 function drawPreviewCustomShapePath(g, x, y, w, h, edges, forceBoxOnFour) {
@@ -974,6 +1373,68 @@ function drawPreviewCustomShapePath(g, x, y, w, h, edges, forceBoxOnFour) {
   g.ellipse(x, y, d, d);
 }
 
+function drawRotorHubCircle(x, y, radius) {
+  noFill();
+  strokeWeight(5);
+  stroke(COLOR_GRAY_LIGHT);
+  ellipse(x, y, radius * 2, radius * 2);
+}
+
+function drawRotorHubGear(x, y, radius, spinDeg = 0) {
+  const outerR = max(4, radius * 1.03);
+  const innerR = outerR * 0.78;
+  const coreR = outerR * 0.45;
+  const teeth = 9;
+
+  push();
+  translate(x, y);
+  rotate(radians(spinDeg));
+  noFill();
+  stroke(COLOR_GRAY_LIGHT);
+  strokeWeight(max(2, outerR * 0.22));
+  beginShape();
+  for (let i = 0; i < teeth * 2; i++) {
+    const a = radians((360 / (teeth * 2)) * i);
+    const rr = i % 2 === 0 ? outerR : innerR;
+    vertex(cos(a) * rr, sin(a) * rr);
+  }
+  endShape(CLOSE);
+  strokeWeight(max(1.5, outerR * 0.15));
+  ellipse(0, 0, coreR * 2, coreR * 2);
+  pop();
+}
+
+function drawPreviewRotorHubCircle(g, x, y, radius) {
+  g.noFill();
+  g.stroke(COLOR_GRAY_LIGHT);
+  g.strokeWeight(2);
+  g.ellipse(x, y, radius * 2, radius * 2);
+}
+
+function drawPreviewRotorHubGear(g, x, y, radius, spinDeg = 0) {
+  const outerR = Math.max(2.5, radius * 1.03);
+  const innerR = outerR * 0.78;
+  const coreR = outerR * 0.45;
+  const teeth = 9;
+
+  g.push();
+  g.translate(x, y);
+  g.rotate(radians(spinDeg));
+  g.noFill();
+  g.stroke(COLOR_GRAY_LIGHT);
+  g.strokeWeight(Math.max(1.2, outerR * 0.2));
+  g.beginShape();
+  for (let i = 0; i < teeth * 2; i++) {
+    const a = radians((360 / (teeth * 2)) * i);
+    const rr = i % 2 === 0 ? outerR : innerR;
+    g.vertex(cos(a) * rr, sin(a) * rr);
+  }
+  g.endShape(CLOSE);
+  g.strokeWeight(Math.max(1, outerR * 0.14));
+  g.ellipse(0, 0, coreR * 2, coreR * 2);
+  g.pop();
+}
+
 function draw() {
   // Main game loop.
   background(COLOR_WHITE);
@@ -981,7 +1442,7 @@ function draw() {
   if (info) {
     textSize(12);
     textAlign(LEFT);
-    text(`fps: ${frameRate().toFixed(3)}, Box: ${boxes.length}, balls: ${circles.length}, lPos: ${linePos.length}, partic.: ${particles.length}, Rotor: ${rotors.length}, Line: ${lines.length}, all lines: ${totalLines}, test: ${linePosTest.length}, mode: ${gameMode}, Level: ${level + 1}`, 100, 20);
+    text(`fps: ${frameRate().toFixed(3)}, Box: ${boxes.length}, ArcB: ${arcBoxes.length}, Group: ${rigidGroups.length}, balls: ${circles.length}, lPos: ${linePos.length}, partic.: ${particles.length}, Rotor: ${rotors.length}, Line: ${lines.length}, all lines: ${totalLines}, test: ${linePosTest.length}, mode: ${gameMode}, Level: ${level + 1}`, 100, 20);
   }
 
   drawPermit = true;
@@ -1802,6 +2263,10 @@ function checkEdge() {
     if (a.contains(mouseX, mouseY, d)) drawPermit = false;
     for (const t of linePosTest) if (a.contains(t.x, t.y, d)) drawPermit = false;
   }
+  for (const g of rigidGroups) {
+    if (g.contains(mouseX, mouseY, d)) drawPermit = false;
+    for (const t of linePosTest) if (g.contains(t.x, t.y, d)) drawPermit = false;
+  }
   for (const c of circles) {
     if (c.contains(mouseX, mouseY, d)) drawPermit = false;
     for (const t of linePosTest) if (c.contains(t.x, t.y, d)) drawPermit = false;
@@ -1824,6 +2289,7 @@ function loadLevel(advance = true) {
   for (const o of circles) o.delete(); circles = [];
   for (const o of boxes) o.delete(); boxes = [];
   for (const o of arcBoxes) o.delete(); arcBoxes = [];
+  for (const o of rigidGroups) o.delete(); rigidGroups = [];
   for (const o of cShapes) o.delete(); cShapes = [];
   for (const o of rotors) o.delete(); rotors = [];
   for (const o of lines) o.delete(); lines = [];
@@ -1844,6 +2310,7 @@ function drawObjects() {
   */
   for (let i = boxes.length - 1; i >= 0; i--) { boxes[i].draw(); if (boxes[i].done()) boxes.splice(i, 1); }
   for (let i = arcBoxes.length - 1; i >= 0; i--) { arcBoxes[i].draw(); if (arcBoxes[i].done()) arcBoxes.splice(i, 1); }
+  for (let i = rigidGroups.length - 1; i >= 0; i--) { rigidGroups[i].draw(); if (rigidGroups[i].done()) rigidGroups.splice(i, 1); }
   for (let i = circles.length - 1; i >= 0; i--) {
     circles[i].draw();
     if (circles[i].done()) {
@@ -1904,13 +2371,67 @@ function spawnLevelObject(obj) {
     return;
   }
 
+  if (obj.type === "rigid_group") {
+    const partsPx = [];
+    const parts = Array.isArray(obj.parts) ? obj.parts : [];
+    for (const rawPart of parts) {
+      const part = normalizeRigidGroupPart(rawPart);
+      if (!part) continue;
+      partsPx.push({
+        type: part.type,
+        x: part.x * width,
+        y: part.y * height,
+        w: part.w * width,
+        h: part.h * height,
+        edges: Number(part.edges) || 6,
+        cut: clampArcCut(part.cut),
+        side: normalizeArcSide(part.side),
+        angle: Number(part.angle) || 0,
+      });
+    }
+    rigidGroups.push(new RigidGroup(
+      obj.x * width,
+      obj.y * height,
+      partsPx,
+      Boolean(obj.static),
+      Number(obj.angle) || 0
+    ));
+    return;
+  }
+
   if (obj.type === "shape") {
     cShapes.push(new CustomShape(obj.x * width, obj.y * height, obj.w * width, obj.h * height, obj.edges, Boolean(obj.static), Number(obj.angle) || 0));
     return;
   }
 
   if (obj.type === "rotor") {
-    rotors.push(new Rotor(obj.x * width, obj.y * height, obj.w * width, obj.h * height, obj.edges, Boolean(obj.motor), Number(obj.angle) || 0));
+    const partsPx = [];
+    const parts = Array.isArray(obj.parts) ? obj.parts : [];
+    for (const rawPart of parts) {
+      const part = normalizeRigidGroupPart(rawPart);
+      if (!part) continue;
+      partsPx.push({
+        type: part.type,
+        x: part.x * width,
+        y: part.y * height,
+        w: part.w * width,
+        h: part.h * height,
+        edges: Number(part.edges) || 6,
+        cut: clampArcCut(part.cut),
+        side: normalizeArcSide(part.side),
+        angle: Number(part.angle) || 0,
+      });
+    }
+    rotors.push(new Rotor(
+      obj.x * width,
+      obj.y * height,
+      obj.w * width,
+      obj.h * height,
+      obj.edges,
+      Boolean(obj.motor),
+      Number(obj.angle) || 0,
+      partsPx
+    ));
   }
 }
 
