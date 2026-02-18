@@ -612,6 +612,8 @@ class LineBody {
   constructor(points, h) {
     // Width and height of the rectangles that compose the drawn line.
     this.h = h;
+    // Broad-phase radius around the body's origin for quick rejection.
+    this.boundR = this.h / 2;
     // List of drawn coordinates.
     this.lineDot = points.map((p) => createVector(p.x, p.y));
     // List of body-local offsets for each coordinate.
@@ -631,6 +633,7 @@ class LineBody {
       const o = box2d.p2w(this.lineDot[i].x, this.lineDot[i].y);
       const local = planck.Vec2(o.x - origin.x, o.y - origin.y);
       this.offset.push(local);
+      this.boundR = Math.max(this.boundR, box2d.wToPx(Math.hypot(local.x, local.y)) + this.h / 2);
 
       const p1 = createVector(this.offset[i - 1].x, this.offset[i - 1].y);
       const p2 = createVector(this.offset[i].x, this.offset[i].y);
@@ -648,8 +651,32 @@ class LineBody {
     }
     this.body.setUserData(this);
   }
-  contains() {
-    // Original sketch intentionally returned false for line-overlap blocking.
+  containsPoint(x, y) {
+    const p = box2d.p2w(x, y);
+    for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
+    return false;
+  }
+  contains(x, y, dia = 0) {
+    // Checks whether the point/brush overlaps this drawn line body.
+    const brushR = Math.max(0, Number(dia) || 0) / 2;
+    const pos = box2d.getBodyPos(this.body);
+    const maxR = this.boundR + brushR;
+    const dx = x - pos.x;
+    const dy = y - pos.y;
+    if (dx * dx + dy * dy > maxR * maxR) return false;
+
+    if (this.containsPoint(x, y)) return true;
+    if (brushR <= 0) return false;
+
+    const dxy = brushR * 0.7071;
+    if (this.containsPoint(x - brushR, y)) return true;
+    if (this.containsPoint(x + brushR, y)) return true;
+    if (this.containsPoint(x, y - brushR)) return true;
+    if (this.containsPoint(x, y + brushR)) return true;
+    if (this.containsPoint(x - dxy, y - dxy)) return true;
+    if (this.containsPoint(x + dxy, y - dxy)) return true;
+    if (this.containsPoint(x - dxy, y + dxy)) return true;
+    if (this.containsPoint(x + dxy, y + dxy)) return true;
     return false;
   }
   delete() { box2d.destroy(this.body); }
@@ -2304,6 +2331,7 @@ function pointBlockedBySolids(x, y, dia = 0) {
   for (const b of boxes) if (b.contains(x, y, dia)) return true;
   for (const a of arcBoxes) if (a.contains(x, y, dia)) return true;
   for (const g of rigidGroups) if (g.contains(x, y, dia)) return true;
+  for (const l of lines) if (l.contains(x, y, dia)) return true;
   for (const c of circles) if (c.contains(x, y, dia)) return true;
   for (const r of rotors) if (r.contains(x, y, dia)) return true;
   for (const s of cShapes) if (s.contains(x, y)) return true;
@@ -2418,8 +2446,6 @@ function drawObjects() {
   for (let i = 1; i < linePos.length; i++) { stroke(COLOR_GRAY_MID); strokeWeight(d); line(linePos[i].x, linePos[i].y, linePos[i - 1].x, linePos[i - 1].y); strokeWeight(1); }
   for (let i = lines.length - 1; i >= 0; i--) {
     lines[i].draw();
-    if (lines[i].contains(mouseX, mouseY, d)) drawPermit = false;
-    for (const t of linePosTest) if (lines[i].contains(t.x, t.y, d)) drawPermit = false;
     if (lines[i].done()) lines.splice(i, 1);
   }
   for (let i = rotors.length - 1; i >= 0; i--) { rotors[i].draw(); if (rotors[i].done()) rotors.splice(i, 1); }
