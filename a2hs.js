@@ -42,30 +42,31 @@ function showA2HSBanner({ showInstallButton, showOpenButton, text: messageText }
   banner.style.left = '0px';
   banner.style.right = '0px';
   banner.style.height = 'auto';
-  banner.style.minHeight = '60px';
-  banner.style.maxHeight = '80px';
+  banner.style.minHeight = '72px';
+  banner.style.maxHeight = 'none';
   banner.style.zIndex = '99999';
   banner.style.backgroundColor = '#2c3e50';
   banner.style.color = '#ffffff';
-  banner.style.padding = '12px 16px';
+  banner.style.padding = '14px 16px';
   banner.style.boxShadow = '0 2px 10px rgba(0,0,0,0.3)';
   banner.style.fontFamily = 'Helvetica, Arial, sans-serif';
-  banner.style.fontSize = '14px';
+  banner.style.fontSize = '16px';
   banner.style.alignItems = 'center';
   banner.style.justifyContent = 'space-between';
-  banner.style.gap = '2px';
-  banner.style.flexWrap = 'nowrap';
+  banner.style.gap = '8px';
+  banner.style.flexWrap = 'wrap';
+  banner.style.pointerEvents = 'auto';
+  banner.style.touchAction = 'manipulation';
+  banner.style.boxSizing = 'border-box';
   
   // Set up the content
   if (text && messageText) {
     text.textContent = messageText;
     text.style.flex = '1';
-    text.style.marginRight = '3px';
-    text.style.fontSize = '14px';
-    text.style.lineHeight = '1.2';
-    text.style.overflow = 'hidden';
-    text.style.textOverflow = 'ellipsis';
-    text.style.whiteSpace = 'nowrap';
+    text.style.marginRight = '6px';
+    text.style.fontSize = '15px';
+    text.style.lineHeight = '1.3';
+    text.style.whiteSpace = 'normal';
     text.style.minWidth = '0';
   }
   
@@ -74,14 +75,17 @@ function showA2HSBanner({ showInstallButton, showOpenButton, text: messageText }
     installBtn.style.backgroundColor = '#3498db';
     installBtn.style.color = '#ffffff';
     installBtn.style.border = 'none';
-    installBtn.style.padding = '10px 12px';
-    installBtn.style.borderRadius = '6px';
-    installBtn.style.fontSize = '15px';
+    installBtn.style.padding = '12px 14px';
+    installBtn.style.borderRadius = '8px';
+    installBtn.style.fontSize = '16px';
     installBtn.style.cursor = 'pointer';
     installBtn.style.fontFamily = 'Helvetica, Arial, sans-serif';
     installBtn.style.flexShrink = '0';
     installBtn.style.whiteSpace = 'nowrap';
-    installBtn.style.minWidth = '60px';
+    installBtn.style.minWidth = '88px';
+    installBtn.style.minHeight = '44px';
+    installBtn.style.pointerEvents = 'auto';
+    installBtn.style.touchAction = 'manipulation';
     // Ensure button has text content
     if (!installBtn.textContent) {
       installBtn.textContent = 'Install';
@@ -93,14 +97,17 @@ function showA2HSBanner({ showInstallButton, showOpenButton, text: messageText }
     openBtn.style.backgroundColor = '#2ecc71';
     openBtn.style.color = '#ffffff';
     openBtn.style.border = 'none';
-    openBtn.style.padding = '10px 12px';
-    openBtn.style.borderRadius = '6px';
-    openBtn.style.fontSize = '15px';
+    openBtn.style.padding = '12px 14px';
+    openBtn.style.borderRadius = '8px';
+    openBtn.style.fontSize = '16px';
     openBtn.style.cursor = 'pointer';
     openBtn.style.fontFamily = 'Helvetica, Arial, sans-serif';
     openBtn.style.flexShrink = '0';
     openBtn.style.whiteSpace = 'nowrap';
-    openBtn.style.minWidth = '60px';
+    openBtn.style.minWidth = '88px';
+    openBtn.style.minHeight = '44px';
+    openBtn.style.pointerEvents = 'auto';
+    openBtn.style.touchAction = 'manipulation';
     // Ensure button has text content
     if (!openBtn.textContent) {
       openBtn.textContent = 'Open App';
@@ -111,12 +118,16 @@ function showA2HSBanner({ showInstallButton, showOpenButton, text: messageText }
     closeBtn.style.backgroundColor = 'transparent';
     closeBtn.style.color = '#ffffff';
     closeBtn.style.border = 'none';
-    closeBtn.style.fontSize = '16px';
+    closeBtn.style.fontSize = '22px';
     closeBtn.style.cursor = 'pointer';
-    closeBtn.style.padding = '4px 4px';
+    closeBtn.style.padding = '6px 8px';
     closeBtn.style.fontFamily = 'Helvetica, Arial, sans-serif';
     closeBtn.style.flexShrink = '0';
-    closeBtn.style.minWidth = '24px';
+    closeBtn.style.minWidth = '36px';
+    closeBtn.style.minHeight = '36px';
+    closeBtn.style.lineHeight = '1';
+    closeBtn.style.pointerEvents = 'auto';
+    closeBtn.style.touchAction = 'manipulation';
     closeBtn.onclick = () => {
       banner.style.display = 'none';
       try { localStorage.setItem('a2hsDismissed', 'true'); } catch (_) {}
@@ -179,8 +190,15 @@ function initA2HSBanner() {
       if (!__deferredA2HSPrompt && !isStandaloneDisplayMode()) {
         // Check if manifest exists to determine if PWA can be installed
         if ('serviceWorker' in navigator && window.matchMedia('(display-mode: browser)').matches) {
-          // Show banner with install button if PWA is not installed
-          showA2HSBanner({ showInstallButton: false, showOpenButton: false, text: 'Install: Menu → Add to Home screen' });
+          // Fallback: provide actionable instructions when install prompt is unavailable.
+          const { installBtn } = getA2HSBannerElements();
+          showA2HSBanner({ showInstallButton: true, showOpenButton: false, text: 'Install for best experience' });
+          if (installBtn) {
+            installBtn.textContent = 'How to Install';
+            installBtn.onclick = () => {
+              window.alert('In Chrome, open menu (⋮) and tap "Add to Home screen" or "Install app".');
+            };
+          }
         }
       }
     }, 2000);

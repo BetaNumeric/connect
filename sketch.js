@@ -79,6 +79,7 @@ let runSetGlobalTimeRecord = false, runSetGlobalLineRecord = false;
 let player = null;
 let viewportScale = 1;
 let isTouchDevice = false;
+let touchInteractionInProgress = false;
 let playerNameFieldRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerPrevButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerNextButtonRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -2245,7 +2246,11 @@ function keyPressed() {
 }
 
 function isPrimaryPointerButton() {
-  return typeof mouseButton === "undefined" || mouseButton === LEFT;
+  if (touchInteractionInProgress) return true;
+  if (typeof mouseButton === "undefined") return true;
+  if (typeof mouseButton === "number") return mouseButton === 0;
+  if (typeof mouseButton === "string") return mouseButton.toLowerCase() === "left";
+  return mouseButton === LEFT;
 }
 
 function mousePressed() {
@@ -2413,21 +2418,36 @@ function mouseReleased() {
 }
 
 function touchStarted() {
+  touchInteractionInProgress = true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
     mousePressed();
     return false;
   }
+  return false;
+}
+
+function touchMoved() {
+  if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
+    mouseDragged();
+    return false;
+  }
+  return false;
 }
 
 function touchEnded() {
   if (gameMode === 0 || gameMode === 1 || gameMode === 2) {
     mouseReleased();
+    touchInteractionInProgress = false;
     return false;
   }
   if (gameMode === 4) {
+    mouseReleased();
     mouseClicked();
+    touchInteractionInProgress = false;
     return false;
   }
+  touchInteractionInProgress = false;
+  return false;
 }
 
 function appendSegmentTestPoints(out, x0, y0, x1, y1, stepPx) {
