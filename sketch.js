@@ -47,6 +47,7 @@ const ARC_SIDE_TOP = "top";
 const ARC_SIDE_RIGHT = "right";
 const ARC_SIDE_BOTTOM = "bottom";
 const ARC_SIDE_LEFT = "left";
+const DRAW_COLLISION_STEP_FACTOR = 0.35;
 const DEFAULT_ROTOR_MOTOR_SPEED_DEG = 180;
 const DEFAULT_ROTOR_MOTOR_DIRECTION = 1;
 const DEFAULT_ROTOR_MOTOR_TORQUE = 1000000000;
@@ -2288,45 +2289,90 @@ function touchEnded() {
   }
 }
 
+function appendSegmentTestPoints(out, x0, y0, x1, y1, stepPx) {
+  const segDist = dist(x0, y0, x1, y1);
+  if (segDist <= 0) return;
+  const step = Math.max(1, Number(stepPx) || 1);
+  const count = Math.max(1, Math.ceil(segDist / step));
+  for (let i = 1; i < count; i++) {
+    const t = i / count;
+    out.push(createVector(lerp(x0, x1, t), lerp(y0, y1, t)));
+  }
+}
+
+function pointBlockedBySolids(x, y, dia = 0) {
+  for (const b of boxes) if (b.contains(x, y, dia)) return true;
+  for (const a of arcBoxes) if (a.contains(x, y, dia)) return true;
+  for (const g of rigidGroups) if (g.contains(x, y, dia)) return true;
+  for (const c of circles) if (c.contains(x, y, dia)) return true;
+  for (const r of rotors) if (r.contains(x, y, dia)) return true;
+  for (const s of cShapes) if (s.contains(x, y)) return true;
+  return false;
+}
+
+function brushBlockedAt(x, y, dia) {
+  // First do an inflated center check for round objects, then sample brush edge points.
+  if (pointBlockedBySolids(x, y, dia)) return true;
+
+  const r = (Number(dia) || 0) / 2;
+  if (r <= 0) return false;
+  const dxy = r * 0.7071;
+  const offsets = [
+    [-r, 0], [r, 0], [0, -r], [0, r],
+    [-dxy, -dxy], [dxy, -dxy], [-dxy, dxy], [dxy, dxy]
+  ];
+  for (const [ox, oy] of offsets) {
+    if (pointBlockedBySolids(x + ox, y + oy, 0)) return true;
+  }
+  return false;
+}
+
+function strokeBlocked(points, dia) {
+  if (!Array.isArray(points) || points.length < 1) return false;
+  const step = Math.max(1, (Number(dia) || 1) * DRAW_COLLISION_STEP_FACTOR);
+
+  // Validate each anchor and swept segment using full brush thickness.
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (brushBlockedAt(p.x, p.y, dia)) return true;
+    if (i > 0) {
+      const prev = points[i - 1];
+      const mid = [];
+      appendSegmentTestPoints(mid, prev.x, prev.y, p.x, p.y, step);
+      for (const m of mid) if (brushBlockedAt(m.x, m.y, dia)) return true;
+    }
+  }
+  return false;
+}
+
 function checkEdge() {
   /*
     Checks if mouse or the segment to the last line coordinate goes inside
     or through another object.
   */
+  drawPermit = true;
+  if (mouseX < d / 2 || mouseX > width - d / 2 || mouseY < d / 2 || mouseY > height - d / 2) {
+    drawPermit = false;
+    return;
+  }
+
   linePosTest = [];
   if (linePos.length > 0) {
     const l = linePos[linePos.length - 1];
     linePosTest.push(l.copy());
-    let dis = dist(l.x, l.y, mouseX, mouseY) / 10;
-    for (let j = 0; j < dis - 1; j++) {
-      const tx = l.x - ((l.x - mouseX) / dis) - ((l.x - mouseX) / dis) * j;
-      const ty = l.y - ((l.y - mouseY) / dis) - ((l.y - mouseY) / dis) * j;
-      linePosTest.push(createVector(tx, ty));
+    const step = Math.max(1, d * DRAW_COLLISION_STEP_FACTOR);
+    appendSegmentTestPoints(linePosTest, l.x, l.y, mouseX, mouseY, step);
+  }
+
+  if (brushBlockedAt(mouseX, mouseY, d)) {
+    drawPermit = false;
+    return;
+  }
+  for (const t of linePosTest) {
+    if (brushBlockedAt(t.x, t.y, d)) {
+      drawPermit = false;
+      return;
     }
-  }
-  for (const b of boxes) {
-    if (b.contains(mouseX, mouseY, d)) drawPermit = false;
-    for (const t of linePosTest) if (b.contains(t.x, t.y, d)) drawPermit = false;
-  }
-  for (const a of arcBoxes) {
-    if (a.contains(mouseX, mouseY, d)) drawPermit = false;
-    for (const t of linePosTest) if (a.contains(t.x, t.y, d)) drawPermit = false;
-  }
-  for (const g of rigidGroups) {
-    if (g.contains(mouseX, mouseY, d)) drawPermit = false;
-    for (const t of linePosTest) if (g.contains(t.x, t.y, d)) drawPermit = false;
-  }
-  for (const c of circles) {
-    if (c.contains(mouseX, mouseY, d)) drawPermit = false;
-    for (const t of linePosTest) if (c.contains(t.x, t.y, d)) drawPermit = false;
-  }
-  for (const r of rotors) {
-    if (r.contains(mouseX, mouseY, d)) drawPermit = false;
-    for (const t of linePosTest) if (r.contains(t.x, t.y, d)) drawPermit = false;
-  }
-  for (const s of cShapes) {
-    if (s.contains(mouseX, mouseY)) drawPermit = false;
-    for (const t of linePosTest) if (s.contains(t.x, t.y)) drawPermit = false;
   }
 }
 
