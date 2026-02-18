@@ -963,6 +963,16 @@ function setup() {
   // Initial canvas, physics world, persistence, and UI setup.
   pixelDensity(1);
   canvasRenderer = createCanvas(BASE_WIDTH, BASE_HEIGHT);
+  if (canvasRenderer && canvasRenderer.elt) {
+    // Prevent browser right/middle-click behavior from affecting gameplay input.
+    canvasRenderer.elt.addEventListener("contextmenu", (e) => e.preventDefault());
+    canvasRenderer.elt.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) e.preventDefault();
+    });
+  }
+  if (typeof document !== "undefined") {
+    document.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
   fitCanvasToWindow();
   rectMode(CENTER);
   imageMode(CENTER);
@@ -2150,8 +2160,17 @@ function keyPressed() {
   return true;
 }
 
+function isPrimaryPointerButton() {
+  return typeof mouseButton === "undefined" || mouseButton === LEFT;
+}
+
 function mousePressed() {
   // Adds first coordinate to linePos when the mouse is pressed.
+  if (!isPrimaryPointerButton()) {
+    menuButtonArmed = false;
+    resetButtonArmed = false;
+    return false;
+  }
   const menuRect = getMenuButtonRect(true);
   menuButtonArmed = (gameMode === 0 || gameMode === 1 || gameMode === 2) && pointInRect(mouseX, mouseY, menuRect);
   const resetRect = getResetButtonRect(true);
@@ -2191,6 +2210,7 @@ function mousePressed() {
 
 function mouseDragged() {
   // Adds coordinates to linePos while dragging.
+  if (!isPrimaryPointerButton()) return false;
   checkEdge();
   if (drawPermit && gameMode === 1) {
     if (linePos.length > 0) {
@@ -2218,6 +2238,7 @@ function mouseWheel(e) {
 }
 
 function mouseClicked() {
+  if (!isPrimaryPointerButton()) return false;
   /*
     Checks if a button is clicked and reloads/selects level. This avoids
     accidental reset while drawing because release is handled separately.
@@ -2258,6 +2279,15 @@ function mouseReleased() {
     If gameMode is 1, convert drawn coordinates into a physical line.
     Otherwise handle button clicks to reset/load level.
   */
+  if (!isPrimaryPointerButton()) {
+    if (gameMode === 4) {
+      menuDragMode = "none";
+      menuScrollbarGrabOffsetX = 0;
+    }
+    menuButtonArmed = false;
+    resetButtonArmed = false;
+    return false;
+  }
   if (gameMode === 4) {
     menuDragMode = "none";
     menuScrollbarGrabOffsetX = 0;
