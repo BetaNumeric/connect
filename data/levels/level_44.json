@@ -16,15 +16,6 @@
       "color": "B"
     },
     {
-      "type": "box",
-      "x": 0.5,
-      "y": 0.975,
-      "w": 1,
-      "h": 0.05,
-      "angle": 0,
-      "static": true
-    },
-    {
       "type": "rotor",
       "x": 0.5,
       "y": 0.5,
