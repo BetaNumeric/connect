@@ -2,11 +2,26 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Connect (p5.js)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#111111" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Connect" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./data/icon_32.png" />
+  <link rel="apple-touch-icon" href="./data/icon_192.png" />
+  <title>Connect</title>
   <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/planck-js@0.3.31/dist/planck.min.js"></script>
   <style>
+    :root {
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-right: env(safe-area-inset-right, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-left: env(safe-area-inset-left, 0px);
+    }
+
     html,
     body {
       margin: 0;
@@ -14,22 +29,102 @@
       width: 100%;
       height: 100%;
       background: #111;
+      overflow: hidden;
+      touch-action: none;
+      overscroll-behavior: none;
+    }
+
+    body {
       display: flex;
       align-items: center;
       justify-content: center;
-      overflow: hidden;
-      touch-action: none; /* Prevents mobile scrolling explicitly */
+      padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+      box-sizing: border-box;
       font-family: Arial, sans-serif;
     }
 
     canvas {
+      display: block;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
     }
 
+    #ios-install-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100000;
+      background: rgba(0, 0, 0, 0.6);
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+
+    #ios-install-card {
+      width: min(440px, 100%);
+      background: #ffffff;
+      color: #222222;
+      border-radius: 14px;
+      padding: 18px 16px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.3);
+      line-height: 1.35;
+    }
+
+    #ios-install-card h2 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    #ios-install-card p {
+      margin: 0 0 12px;
+      font-size: 15px;
+    }
+
+    #ios-close-btn {
+      border: none;
+      background: #1d71ff;
+      color: #ffffff;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 15px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
-  <script src="data/levels/levels-data.js"></script>
-  <script src="sketch.js"></script>
+  <div id="a2hs-banner" style="display: none;">
+    <span id="a2hs-text"></span>
+    <button id="a2hs-install-btn" type="button">Install</button>
+    <button id="a2hs-open-btn" type="button">Open App</button>
+    <button id="a2hs-close-btn" type="button" aria-label="Dismiss">X</button>
+  </div>
+
+  <div id="ios-install-overlay" role="dialog" aria-modal="true" aria-label="Install instructions">
+    <div id="ios-install-card">
+      <h2>Install Connect</h2>
+      <p>In Safari, tap Share, then choose Add to Home Screen.</p>
+      <button id="ios-close-btn" type="button">Close</button>
+    </div>
+  </div>
+
+  <script>
+    window.isMobileDevice = window.isMobileDevice || function isMobileDevice() {
+      const ua = navigator.userAgent || "";
+      const coarsePointer = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+      return /android|iphone|ipad|ipod/i.test(ua) || coarsePointer;
+    };
+  </script>
+  <script src="./data/levels/levels-data.js"></script>
+  <script src="./sketch.js"></script>
+  <script src="./a2hs.js"></script>
+  <script>
+    if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./service-worker.js").catch((err) => {
+          console.warn("Service worker registration failed:", err);
+        });
+      });
+    }
+  </script>
 </body>
 </html>
