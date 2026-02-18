@@ -2253,6 +2253,40 @@ function isPrimaryPointerButton() {
   return mouseButton === LEFT;
 }
 
+function isCanvasTouchEvent(event) {
+  if (!canvasRenderer || !canvasRenderer.elt) return false;
+  const canvasEl = canvasRenderer.elt;
+  const target = event?.target;
+
+  if (target && typeof target.closest === "function") {
+    if (target.closest("#a2hs-banner, #ios-install-overlay")) return false;
+    const targetCanvas = target.closest("canvas");
+    if (targetCanvas === canvasEl) return true;
+  }
+  if (target === canvasEl) return true;
+
+  const changedTouches = event?.changedTouches;
+  if (changedTouches && changedTouches.length > 0) {
+    const rect = canvasEl.getBoundingClientRect();
+    for (let i = 0; i < changedTouches.length; i++) {
+      const t = changedTouches[i];
+      if (t.clientX >= rect.left && t.clientX <= rect.right && t.clientY >= rect.top && t.clientY <= rect.bottom) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (typeof touches !== "undefined" && Array.isArray(touches) && touches.length > 0) {
+    const t = touches[0];
+    if (Number.isFinite(t?.x) && Number.isFinite(t?.y)) {
+      return t.x >= 0 && t.x <= width && t.y >= 0 && t.y <= height;
+    }
+  }
+
+  return false;
+}
+
 function mousePressed() {
   // Adds first coordinate to linePos when the mouse is pressed.
   if (!isPrimaryPointerButton()) {
@@ -2417,8 +2451,9 @@ function mouseReleased() {
   menuButtonArmed = false;
 }
 
-function touchStarted() {
-  touchInteractionInProgress = true;
+function touchStarted(event) {
+  touchInteractionInProgress = isCanvasTouchEvent(event);
+  if (!touchInteractionInProgress) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
     mousePressed();
     return false;
@@ -2426,7 +2461,9 @@ function touchStarted() {
   return false;
 }
 
-function touchMoved() {
+function touchMoved(event) {
+  if (!touchInteractionInProgress) return true;
+  if (event && !isCanvasTouchEvent(event)) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
     mouseDragged();
     return false;
@@ -2434,7 +2471,11 @@ function touchMoved() {
   return false;
 }
 
-function touchEnded() {
+function touchEnded(event) {
+  if (!touchInteractionInProgress) {
+    touchInteractionInProgress = false;
+    return true;
+  }
   if (gameMode === 0 || gameMode === 1 || gameMode === 2) {
     mouseReleased();
     touchInteractionInProgress = false;

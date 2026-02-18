@@ -20,6 +20,33 @@ function getA2HSBannerElements() {
   return { banner, installBtn, openBtn, closeBtn, text, iosOverlay, iosCloseBtn };
 }
 
+function shieldElementFromGameTouch(el) {
+  if (!el || el.__a2hsShielded) return;
+  const stop = (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); };
+  el.addEventListener('touchstart', stop, { passive: true });
+  el.addEventListener('touchmove', stop, { passive: true });
+  el.addEventListener('touchend', stop, { passive: false });
+  el.addEventListener('pointerdown', stop);
+  el.addEventListener('pointerup', stop);
+  el.__a2hsShielded = true;
+}
+
+function bindTapAction(el, action) {
+  if (!el || typeof action !== 'function') return;
+  let lastHandledAt = 0;
+  const handler = (e) => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    const now = Date.now();
+    if (now - lastHandledAt < 300) return;
+    lastHandledAt = now;
+    action();
+  };
+  el.onclick = handler;
+  el.ontouchend = handler;
+  el.onpointerup = handler;
+}
+
 function shouldShowA2HSBanner() {
   // Use the global isMobileDevice function from main.js
   if (typeof isMobileDevice === 'function' && !isMobileDevice()) return false;
@@ -33,6 +60,10 @@ function shouldShowA2HSBanner() {
 function showA2HSBanner({ showInstallButton, showOpenButton, text: messageText }) {
   const { banner, installBtn, openBtn, closeBtn, text } = getA2HSBannerElements();
   if (!banner) return;
+  shieldElementFromGameTouch(banner);
+  shieldElementFromGameTouch(installBtn);
+  shieldElementFromGameTouch(openBtn);
+  shieldElementFromGameTouch(closeBtn);
   
   // Clear all existing styles and CSS variables - use explicit styles only
   banner.style.cssText = '';
@@ -128,10 +159,10 @@ function showA2HSBanner({ showInstallButton, showOpenButton, text: messageText }
     closeBtn.style.lineHeight = '1';
     closeBtn.style.pointerEvents = 'auto';
     closeBtn.style.touchAction = 'manipulation';
-    closeBtn.onclick = () => {
+    bindTapAction(closeBtn, () => {
       banner.style.display = 'none';
       try { localStorage.setItem('a2hsDismissed', 'true'); } catch (_) {}
-    };
+    });
   }
 }
 
@@ -156,13 +187,13 @@ function initA2HSBanner() {
     const { installBtn, openBtn, banner } = getA2HSBannerElements();
     showA2HSBanner({ showInstallButton: true, showOpenButton: false, text: 'Install for best experience' });
     if (installBtn) {
-      installBtn.onclick = async () => {
+      bindTapAction(installBtn, async () => {
         if (!__deferredA2HSPrompt) return;
         __deferredA2HSPrompt.prompt();
         try { await __deferredA2HSPrompt.userChoice; } catch (_) {}
         __deferredA2HSPrompt = null;
         if (banner) banner.style.display = 'none';
-      };
+      });
     }
   });
   
@@ -172,12 +203,14 @@ function initA2HSBanner() {
     showA2HSBanner({ showInstallButton: true, showOpenButton: false, text: 'Install for best experience' });
     if (installBtn) {
       installBtn.textContent = 'How to Install';
-      installBtn.onclick = () => {
+      bindTapAction(installBtn, () => {
         if (iosOverlay) iosOverlay.style.display = 'flex';
-      };
+      });
     }
     if (iosCloseBtn && iosOverlay) {
-      iosCloseBtn.onclick = () => { iosOverlay.style.display = 'none'; };
+      shieldElementFromGameTouch(iosOverlay);
+      shieldElementFromGameTouch(iosCloseBtn);
+      bindTapAction(iosCloseBtn, () => { iosOverlay.style.display = 'none'; });
       iosOverlay.onclick = (e) => {
         if (e.target === iosOverlay) iosOverlay.style.display = 'none';
       };
@@ -195,9 +228,9 @@ function initA2HSBanner() {
           showA2HSBanner({ showInstallButton: true, showOpenButton: false, text: 'Install for best experience' });
           if (installBtn) {
             installBtn.textContent = 'How to Install';
-            installBtn.onclick = () => {
+            bindTapAction(installBtn, () => {
               window.alert('In Chrome, open menu (⋮) and tap "Add to Home screen" or "Install app".');
-            };
+            });
           }
         }
       }
