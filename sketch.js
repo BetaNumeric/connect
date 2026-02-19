@@ -72,6 +72,8 @@ let selectedLevel = -1;
 let levelDefs = [];
 let levelData = null;
 let levelImg = [];
+let levelDefaultImg = [];
+let levelsLoadingFromSources = false;
 let timeStart = 0, time = 0, totalLines = 0;
 let minTime = 0, minLines = 0;
 let playerMinTime = null, playerMinLines = null;
@@ -1071,15 +1073,17 @@ function setup() {
     }
   }
 
+  const canFetch = typeof window !== "undefined" && window.location && window.location.protocol !== "file:";
   const hasJsonLevels = levelData && Array.isArray(levelData.levels) && levelData.levels.length > 0;
-  if (!hasJsonLevels && typeof CONNECT_LEVEL_DATA === "object" && CONNECT_LEVEL_DATA) {
+  if (!editorTestMode && !canFetch && !hasJsonLevels && typeof CONNECT_LEVEL_DATA === "object" && CONNECT_LEVEL_DATA) {
     levelData = CONNECT_LEVEL_DATA;
   }
+  levelsLoadingFromSources = canFetch && !editorTestMode;
   applyLoadedLevelData(levelData);
-  generateDefaultPreviews();
+  if (!levelsLoadingFromSources) generateDefaultPreviews();
 
   loadScores();
-  loadStoredPreviews();
+  if (!levelsLoadingFromSources) loadStoredPreviews();
   circleR = width / 50;
   d = width / 100;
   buttonX = width / 2;
@@ -1098,21 +1102,39 @@ function setup() {
     loadLevel(false);
   }
 
-  const canFetch = typeof window !== "undefined" && window.location && window.location.protocol !== "file:";
   if (canFetch && !editorTestMode) {
     reloadLevelDataFromSources()
       .then((data) => {
-        if (!data || !Array.isArray(data.levels) || data.levels.length < 1) return;
-        levelData = data;
+        const hasFetchedLevels = data && Array.isArray(data.levels) && data.levels.length > 0;
+        if (hasFetchedLevels) {
+          levelData = data;
+        } else if (typeof CONNECT_LEVEL_DATA === "object" && CONNECT_LEVEL_DATA) {
+          // Last-resort fallback for environments where fetch is blocked.
+          levelData = CONNECT_LEVEL_DATA;
+        }
         applyLoadedLevelData(levelData);
         generateDefaultPreviews();
         loadStoredPreviews();
         scoreStore.rows = scoreStore.rows.map(normalizeRow);
         if (level > getMaxLevelIndex()) level = 0;
+        levelsLoadingFromSources = false;
         if (gameMode === 4) refreshHtmlLevelMenu(false);
-        console.info(`Loaded ${getLevelCount()} levels from manifest/data files.`);
+        if (hasFetchedLevels) console.info(`Loaded ${getLevelCount()} levels from manifest/data files.`);
+        else console.warn("Using CONNECT_LEVEL_DATA fallback because manifest/data files were unavailable.");
       })
       .catch((err) => {
+        if (typeof CONNECT_LEVEL_DATA === "object" && CONNECT_LEVEL_DATA) {
+          levelData = CONNECT_LEVEL_DATA;
+          applyLoadedLevelData(levelData);
+          generateDefaultPreviews();
+          loadStoredPreviews();
+          scoreStore.rows = scoreStore.rows.map(normalizeRow);
+          if (level > getMaxLevelIndex()) level = 0;
+          levelsLoadingFromSources = false;
+          if (gameMode === 4) refreshHtmlLevelMenu(false);
+        } else {
+          levelsLoadingFromSources = false;
+        }
         console.warn("Failed to load levels from sources:", err);
       });
   }
@@ -1169,6 +1191,16 @@ function resolveLevelFilePath(entry) {
   return `${LEVEL_FILES_DIR}/${entry}`;
 }
 
+function deriveLevelIdFromFileRef(fileRef, fallbackIndex = 0) {
+  const raw = String(fileRef ?? "").trim();
+  if (!raw) return `level_${fallbackIndex}`;
+  const clean = raw.split("#")[0].split("?")[0];
+  const parts = clean.split("/");
+  const baseName = parts[parts.length - 1] || clean;
+  const id = baseName.replace(/\.[^/.]+$/, "").trim();
+  return id || `level_${fallbackIndex}`;
+}
+
 async function loadLevelDataFromIndex() {
   const indexData = await fetchJsonNoStore(LEVEL_INDEX_PATH);
   const refs = Array.isArray(indexData?.levels) ? indexData.levels : [];
@@ -1176,17 +1208,16 @@ async function loadLevelDataFromIndex() {
 
   const loadedLevels = await Promise.all(refs.map(async (ref, idx) => {
     let fileRef = "";
-    let fallbackId = idx;
     if (typeof ref === "string") fileRef = ref;
     else if (ref && typeof ref === "object") {
       fileRef = String(ref.file ?? ref.path ?? ref.name ?? "");
-      if (Number.isInteger(ref.id)) fallbackId = ref.id;
     }
     const filePath = resolveLevelFilePath(fileRef);
     if (!filePath) throw new Error(`Invalid level reference at index ${idx}`);
     const levelFile = await fetchJsonNoStore(filePath);
+    const derivedId = deriveLevelIdFromFileRef(fileRef, idx);
     return {
-      id: Number.isInteger(levelFile?.id) ? levelFile.id : fallbackId,
+      id: derivedId,
       objects: Array.isArray(levelFile?.objects) ? levelFile.objects : [],
     };
   }));
@@ -1222,27 +1253,30 @@ function getMaxLevelIndex() { return Math.max(0, getLevelCount() - 1); }
 
 function applyLoadedLevelData(rawData) {
   levelDefs = normalizeLevelDefinitions(rawData);
-  if (levelDefs.length < 1) levelDefs = [{ id: 0, objects: [] }];
+  if (levelDefs.length < 1) levelDefs = [{ id: "level_0", objects: [] }];
   levelImg = new Array(levelDefs.length).fill(null);
+  levelDefaultImg = new Array(levelDefs.length).fill(null);
   level = constrain(level, 0, getMaxLevelIndex());
 }
 
 function normalizeLevelDefinitions(rawData) {
   const sourceLevels = Array.isArray(rawData?.levels) ? rawData.levels : [];
-  const indexed = [];
+  const out = [];
   for (let i = 0; i < sourceLevels.length; i++) {
     const srcLevel = sourceLevels[i];
-    const id = Number.isInteger(srcLevel?.id) && srcLevel.id >= 0 ? srcLevel.id : i;
+    const rawId = srcLevel?.id;
+    let id = "";
+    if (typeof rawId === "string" && rawId.trim().length > 0) id = rawId.trim();
+    else if (Number.isInteger(rawId)) id = String(rawId);
+    else id = `level_${i}`;
     const srcObjects = Array.isArray(srcLevel?.objects) ? srcLevel.objects : [];
     const objects = [];
     for (const rawObject of srcObjects) {
       const obj = normalizeLevelObject(rawObject);
       if (obj) objects.push(obj);
     }
-    indexed[id] = { id, objects };
+    out.push({ id, objects });
   }
-  const out = [];
-  for (let i = 0; i < indexed.length; i++) out.push(indexed[i] || { id: i, objects: [] });
   return out;
 }
 
@@ -1340,7 +1374,9 @@ function normalizeLevelObject(rawObject) {
 function generateDefaultPreviews() {
   // Draw default level previews directly from level geometry.
   for (let i = 0; i < levelImg.length; i++) {
-    levelImg[i] = renderLevelPreview(levelDefs[i], i);
+    const preview = renderLevelPreview(levelDefs[i], i);
+    levelDefaultImg[i] = preview;
+    levelImg[i] = preview;
   }
 }
 
@@ -1626,7 +1662,8 @@ function draw() {
   if (gameMode === 2) drawResultMode();
   if ((gameMode === 1 && physics) || (gameMode === 2 && levelUp)) drawResetButton();
   if (gameMode === 0 || gameMode === 1 || gameMode === 2) drawGlobalMenuButton();
-  if (gameMode === 4 && !htmlMenuDrawn) drawLevelMenu();
+  if (gameMode === 4 && levelsLoadingFromSources) drawLevelMenuLoading();
+  else if (gameMode === 4 && !htmlMenuDrawn) drawLevelMenu();
   if (gameMode === 5) {
     if (editorTestMode) {
       level = 0;
@@ -1874,6 +1911,72 @@ function getHtmlMenuUi() {
     scrollbarHandle.style.width = `${handleWidth}px`;
     scrollbarHandle.style.left = `${handleLeft}px`;
   };
+  const updateLevelCardWidthForHeight = () => {
+    const sampleCard = levelList.querySelector(".level-menu-card");
+    if (!sampleCard) {
+      levelList.style.removeProperty("--menu-card-width");
+      return;
+    }
+
+    // Use CSS default width as baseline, then iteratively shrink to fit current list height.
+    levelList.style.removeProperty("--menu-card-width");
+    const baselineCardWidth = Math.round(sampleCard.getBoundingClientRect().width);
+    const maxAllowedHeight = Math.max(1, Math.floor(levelList.clientHeight) - 2);
+    if (!Number.isFinite(baselineCardWidth) || baselineCardWidth <= 0 || maxAllowedHeight <= 0) return;
+
+    const minCardWidth = 90;
+    let fittedWidth = baselineCardWidth;
+    for (let i = 0; i < 5; i++) {
+      levelList.style.setProperty("--menu-card-width", `${fittedWidth}px`);
+      const measuredCard = levelList.querySelector(".level-menu-card");
+      const measuredHeight = measuredCard ? Math.ceil(measuredCard.getBoundingClientRect().height) : 0;
+      if (measuredHeight <= maxAllowedHeight || fittedWidth <= minCardWidth) break;
+
+      const ratio = maxAllowedHeight / Math.max(1, measuredHeight);
+      const nextWidth = Math.floor(fittedWidth * ratio) - 1;
+      fittedWidth = Math.max(minCardWidth, Math.min(fittedWidth - 1, nextWidth));
+    }
+    levelList.style.setProperty("--menu-card-width", `${Math.max(minCardWidth, fittedWidth)}px`);
+  };
+  const updateMenuLayout = () => {
+    updateLevelCardWidthForHeight();
+    updateScrollbarFromLevelList();
+  };
+  const handleMenuWheelEvent = (event) => {
+    if (!isHtmlLevelMenuActive()) return;
+    if (event?.ctrlKey) return;
+    const didScroll = scrollLevelListWithWheel(event);
+    if (event?.cancelable) event.preventDefault();
+    if (didScroll && typeof event.stopPropagation === "function") event.stopPropagation();
+  };
+  const scrollLevelListWithWheel = (event) => {
+    if (!event) return false;
+    let delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    if (event.deltaMode === 1) delta *= 32; // line mode -> px
+    else if (event.deltaMode === 2) delta *= Math.max(1, levelList.clientWidth); // page mode -> px
+    if (delta !== 0 && Math.abs(delta) < 40) delta = Math.sign(delta) * 40; // avoid snap-back on tiny wheel ticks
+    if (!Number.isFinite(delta) || delta === 0) return false;
+    const maxScrollLeft = Math.max(0, levelList.scrollWidth - levelList.clientWidth);
+    if (maxScrollLeft <= 0) return false;
+    const sampleCard = levelList.querySelector(".level-menu-card");
+    if (!sampleCard) return false;
+    let gap = 0;
+    try {
+      const styles = window.getComputedStyle(levelList);
+      gap = Number.parseFloat(styles.columnGap || styles.gap || "0") || 0;
+    } catch {}
+    const pitch = Math.max(1, Math.round(sampleCard.getBoundingClientRect().width + gap));
+    const stepCount = Math.max(1, Math.round(Math.abs(delta) / 120));
+    const direction = Math.sign(delta);
+    const currentIndex = Math.round(levelList.scrollLeft / pitch);
+    const maxIndex = Math.max(0, Math.round(maxScrollLeft / pitch));
+    const nextIndex = Math.max(0, Math.min(maxIndex, currentIndex + direction * stepCount));
+    const next = Math.max(0, Math.min(maxScrollLeft, nextIndex * pitch));
+    if (next === levelList.scrollLeft) return false;
+    levelList.scrollLeft = next;
+    updateScrollbarFromLevelList();
+    return true;
+  };
   const setLevelListScrollFromClientX = (clientX, grabOffsetX = null) => {
     const { maxScrollLeft, handleWidth, maxHandleLeft } = getScrollbarMetrics();
     if (maxScrollLeft <= 0) {
@@ -1890,6 +1993,7 @@ function getHtmlMenuUi() {
     updateScrollbarFromLevelList();
   };
   htmlMenuUi.updateScrollbar = updateScrollbarFromLevelList;
+  htmlMenuUi.updateLayout = updateMenuLayout;
 
   const stopPropagation = (event) => {
     if (event && typeof event.stopPropagation === "function") event.stopPropagation();
@@ -2028,19 +2132,21 @@ function getHtmlMenuUi() {
     openLevelFromHtmlMenu(levelIndex);
   });
 
-  levelList.addEventListener("wheel", (event) => {
-    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-    levelList.scrollLeft += event.deltaY;
-    updateScrollbarFromLevelList();
-    event.preventDefault();
-  }, { passive: false });
+  window.addEventListener("wheel", handleMenuWheelEvent, { passive: false, capture: true });
 
   levelList.addEventListener("scroll", () => {
     updateScrollbarFromLevelList();
   }, { passive: true });
 
+  window.addEventListener("resize", () => {
+    if (!isHtmlLevelMenuActive()) return;
+    requestAnimationFrame(() => {
+      updateMenuLayout();
+    });
+  });
+
   requestAnimationFrame(() => {
-    updateScrollbarFromLevelList();
+    updateMenuLayout();
   });
 
   return htmlMenuUi;
@@ -2069,9 +2175,9 @@ function setHtmlLevelMenuVisible(visible) {
   htmlMenuVisible = Boolean(visible);
   ui.overlay.classList.toggle("is-visible", htmlMenuVisible);
   ui.overlay.setAttribute("aria-hidden", htmlMenuVisible ? "false" : "true");
-  if (htmlMenuVisible && typeof ui.updateScrollbar === "function") {
+  if (htmlMenuVisible && typeof ui.updateLayout === "function") {
     requestAnimationFrame(() => {
-      ui.updateScrollbar();
+      ui.updateLayout();
     });
   }
 }
@@ -2108,16 +2214,31 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
     if (i === level) card.classList.add("is-current");
     card.dataset.level = String(i);
 
+    calcScore(i);
+    const isSolved = minLines > 0 || minTime > 0;
+    if (isSolved) card.classList.add("is-solved");
+
     const previewWrap = document.createElement("div");
     previewWrap.className = "level-menu-preview";
     const previewData = levelPreviewToDataUrl(levelImg[i]);
-    if (previewData) {
-      const previewImg = document.createElement("img");
-      previewImg.src = previewData;
-      previewImg.alt = `Level ${i + 1} preview`;
-      previewImg.loading = "lazy";
-      previewImg.decoding = "async";
-      previewWrap.appendChild(previewImg);
+    const defaultPreviewData = levelPreviewToDataUrl(levelDefaultImg[i] || levelImg[i]);
+    const hasPreview = Boolean(previewData || defaultPreviewData);
+    if (hasPreview) {
+      const currentSrc = previewData || defaultPreviewData;
+      const previewImgCurrent = document.createElement("img");
+      previewImgCurrent.className = "level-menu-preview-image level-menu-preview-current";
+      previewImgCurrent.src = currentSrc;
+      previewImgCurrent.alt = `Level ${i + 1} preview`;
+      previewWrap.appendChild(previewImgCurrent);
+
+      if (isSolved && defaultPreviewData && defaultPreviewData !== currentSrc) {
+        const previewImgDefault = document.createElement("img");
+        previewImgDefault.className = "level-menu-preview-image level-menu-preview-default";
+        previewImgDefault.src = defaultPreviewData;
+        previewImgDefault.alt = "";
+        previewImgDefault.setAttribute("aria-hidden", "true");
+        previewWrap.appendChild(previewImgDefault);
+      }
     } else {
       const previewEmpty = document.createElement("span");
       previewEmpty.className = "level-menu-preview-empty";
@@ -2127,10 +2248,11 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
 
     const levelLabel = document.createElement("span");
     levelLabel.className = "level-menu-label";
-    levelLabel.textContent = `Level ${i + 1}`;
+    if (isSolved) levelLabel.classList.add("is-solved");
+    levelLabel.textContent = `${i + 1}`;
+    levelLabel.setAttribute("aria-label", `Level ${i + 1}${isSolved ? " solved" : ""}`);
     previewWrap.appendChild(levelLabel);
 
-    calcScore(i);
     const scoreWrap = document.createElement("div");
     scoreWrap.className = "level-menu-score";
 
@@ -2154,9 +2276,9 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
 
   ui.levelList.replaceChildren(fragment);
   ui.levelList.scrollLeft = scrollLeft;
-  if (typeof ui.updateScrollbar === "function") {
+  if (typeof ui.updateLayout === "function") {
     requestAnimationFrame(() => {
-      ui.updateScrollbar();
+      ui.updateLayout();
     });
   }
   return true;
@@ -2166,6 +2288,11 @@ function syncHtmlLevelMenuVisibility() {
   const ui = getHtmlMenuUi();
   if (!ui) {
     htmlMenuVisible = false;
+    return false;
+  }
+
+  if (gameMode === 4 && levelsLoadingFromSources) {
+    if (htmlMenuVisible) setHtmlLevelMenuVisible(false);
     return false;
   }
 
@@ -2233,6 +2360,15 @@ function drawLevelMenu() {
   rect(width / 2, scrollbar.trackY, width, scrollbar.track.h);
   fill(COLOR_GRAY_MID);
   rect(scrollbar.handle.x + scrollbar.handle.w / 2, scrollbar.trackY, scrollbar.handle.w, scrollbar.handle.h);
+}
+
+function drawLevelMenuLoading() {
+  background(COLOR_GRAY_LIGHT);
+  noStroke();
+  fill(COLOR_BLACK);
+  textAlign(CENTER, CENTER);
+  textSize(Math.max(18, height / 26));
+  text("Loading levels...", width / 2, height / 2);
 }
 
 function drawMenuTopPlayerBar() {
@@ -2551,13 +2687,28 @@ function calcScore(lv) {
 function previewKey(i) { return `${PREVIEW_KEY}${i}`; }
 function loadStoredPreviews() {
   // Load persisted level thumbnails from localStorage.
+  let pendingLoads = 0;
+  let updatedAny = false;
+  const finalize = () => {
+    if (pendingLoads !== 0) return;
+    if (updatedAny && gameMode === 4) refreshHtmlLevelMenu();
+  };
+
   for (let i = 0; i <= getMaxLevelIndex(); i++) {
     const data = localStorage.getItem(previewKey(i));
-    if (data) loadImage(data, (img) => {
+    if (!data) continue;
+    pendingLoads++;
+    loadImage(data, (img) => {
       levelImg[i] = img;
-      if (gameMode === 4) refreshHtmlLevelMenu();
-    }, () => {});
+      updatedAny = true;
+      pendingLoads--;
+      finalize();
+    }, () => {
+      pendingLoads--;
+      finalize();
+    });
   }
+  finalize();
 }
 function saveLevelPreview(i) {
   // Snapshot the current canvas as the level's preview image.
@@ -2757,8 +2908,8 @@ function mouseDragged() {
 }
 
 function mouseWheel(e) {
-  if (isHtmlLevelMenuActive()) return true;
-  const c = e.deltaY === 0 ? 0 : Math.sign(e.deltaY);
+  if (isHtmlLevelMenuActive()) return false;
+  const c = e?.deltaY === 0 ? 0 : Math.sign(e?.deltaY || 0);
   if (gameMode === 4 && c !== 0) imgScroll = clampLevelScroll(imgScroll + c * MENU_SCROLL_STEP_PX);
   return false;
 }

@@ -24,6 +24,7 @@
       --ui-white: #ffffff;
       --ui-gray-mid: #7f7f7f;
       --ui-gray-light: #c8c8c8;
+      --ui-success: #00ff00;
     }
 
     html,
@@ -59,9 +60,9 @@
       z-index: 9000;
       background: var(--ui-gray-light);
       padding:
-        calc(var(--safe-top) + 16px)
+        calc(var(--safe-top) + 8px)
         var(--safe-right)
-        calc(var(--safe-bottom) + 16px)
+        calc(var(--safe-bottom) + 8px)
         var(--safe-left);
       box-sizing: border-box;
       pointer-events: none;
@@ -79,12 +80,13 @@
     }
 
     #level-menu-shell {
+      --menu-control-size: 52px;
       width: 100%;
       height: 100%;
       margin: 0;
       display: grid;
-      grid-template-rows: minmax(72px, 1fr) auto minmax(56px, 1fr);
-      row-gap: 14px;
+      grid-template-rows: minmax(20px, 0.35fr) minmax(0, 1fr) minmax(20px, 0.35fr);
+      row-gap: 8px;
       color: var(--ui-black);
     }
 
@@ -123,8 +125,8 @@
       place-items: center;
       width: 52px;
       min-width: 52px;
-      height: 52px;
-      min-height: 52px;
+      height: var(--menu-control-size);
+      min-height: var(--menu-control-size);
       font-size: 35px;
       line-height: 0;
       padding: 0;
@@ -162,8 +164,8 @@
       font-size: 20px;
       line-height: 1;
       padding: 0 14px;
-      height: 52px;
-      min-height: 52px;
+      height: var(--menu-control-size);
+      min-height: var(--menu-control-size);
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -171,6 +173,7 @@
     }
 
     #level-menu-list {
+      --menu-card-width: clamp(250px, 29vw, 390px);
       display: flex;
       align-items: center;
       gap: 12px;
@@ -199,7 +202,7 @@
       position: relative;
       align-self: center;
       width: 100%;
-      height: 22px;
+      height: var(--menu-control-size);
       background: var(--ui-white);
       border: 0;
       border-radius: 0;
@@ -240,7 +243,7 @@
       display: grid;
       grid-template-rows: auto auto;
       scroll-snap-align: start;
-      flex: 0 0 clamp(250px, 29vw, 390px);
+      flex: 0 0 var(--menu-card-width);
       transition: border-width 120ms ease;
     }
 
@@ -259,20 +262,40 @@
       width: 100%;
       aspect-ratio: 4 / 3;
       background: var(--ui-white);
-      border-bottom: 1px solid var(--ui-black);
       overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
     }
 
-    .level-menu-preview img {
+    .level-menu-preview-image {
+      position: absolute;
+      inset: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
       display: block;
       -webkit-user-drag: none;
       pointer-events: none;
+      transition: opacity 140ms ease;
+    }
+
+    .level-menu-preview-current {
+      opacity: 1;
+    }
+
+    .level-menu-preview-default {
+      opacity: 0;
+    }
+
+    .level-menu-card.is-solved:hover .level-menu-preview-current,
+    .level-menu-card.is-solved:focus-visible .level-menu-preview-current {
+      opacity: 0;
+    }
+
+    .level-menu-card.is-solved:hover .level-menu-preview-default,
+    .level-menu-card.is-solved:focus-visible .level-menu-preview-default {
+      opacity: 1;
     }
 
     .level-menu-preview-empty {
@@ -286,13 +309,23 @@
       position: absolute;
       top: 8px;
       left: 8px;
-      background: rgba(17, 17, 17, 0.8);
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--ui-gray-mid);
       color: var(--ui-white);
-      border-radius: 999px;
-      padding: 3px 8px;
-      font-size: 12px;
-      letter-spacing: 0.02em;
+      border-radius: 50%;
+      padding: 0;
+      font-size: 13px;
+      font-weight: 700;
       line-height: 1;
+    }
+
+    .level-menu-label.is-solved {
+      background: var(--ui-success);
+      color: var(--ui-black);
     }
 
     .level-menu-score {
@@ -308,15 +341,16 @@
     @media (max-width: 720px) {
       #level-menu-overlay {
         padding:
-          calc(var(--safe-top) + 12px)
+          calc(var(--safe-top) + 6px)
           var(--safe-right)
-          calc(var(--safe-bottom) + 12px)
+          calc(var(--safe-bottom) + 6px)
           var(--safe-left);
       }
 
       #level-menu-shell {
-        grid-template-rows: minmax(56px, 1fr) auto minmax(44px, 1fr);
-        row-gap: 10px;
+        --menu-control-size: 46px;
+        grid-template-rows: minmax(12px, 0.28fr) minmax(0, 1fr) minmax(12px, 0.28fr);
+        row-gap: 6px;
       }
 
       #level-menu-player {
@@ -326,28 +360,21 @@
       .menu-player-btn {
         width: 46px;
         min-width: 46px;
-        height: 46px;
-        min-height: 46px;
         font-size: 30px;
       }
 
       .menu-player-name {
-        height: 46px;
-        min-height: 46px;
         font-size: 16px;
         padding: 0 10px;
       }
 
-      #level-menu-scrollbar {
-        height: 20px;
-      }
-
       #level-menu-list {
+        --menu-card-width: min(78vw, 340px);
         gap: 10px;
       }
 
       .level-menu-card {
-        flex-basis: min(78vw, 340px);
+        flex-basis: var(--menu-card-width);
       }
     }
 
