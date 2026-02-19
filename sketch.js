@@ -2499,6 +2499,16 @@ function pointInRect(px, py, rectData) {
   );
 }
 
+function pointInRectWithSlop(px, py, rectData, slop = 0) {
+  const s = Math.max(0, Number(slop) || 0);
+  return pointInRect(px, py, {
+    x: rectData.x - s,
+    y: rectData.y - s,
+    w: rectData.w + s * 2,
+    h: rectData.h + s * 2,
+  });
+}
+
 function getLevelCardGap() {
   return MENU_LEVEL_CARD_GAP_PX;
 }
@@ -2540,7 +2550,8 @@ function getMenuButtonRect(expand = false) {
   const w = width / 8;
   const h = height / 16;
   const x = width / 40;
-  const y = height / 30;
+  // Align top edge with reset button for consistent vertical level.
+  const y = getResetButtonRect(false).y;
   const rect = { x, y, w, h };
   if (!expand) return rect;
   // On touch devices, enlarge only the hit area (not visuals)
@@ -3050,11 +3061,14 @@ function mouseReleased(event) {
     menuDragMode = "none";
     menuScrollbarGrabOffsetX = 0;
   }
+  const buttonReleaseSlop = isTouchDevice
+    ? Math.max(12, Math.round(Math.min(width, height) * 0.012))
+    : Math.max(6, Math.round(Math.min(width, height) * 0.008));
 
   if (
     (gameMode === 0 || gameMode === 1 || gameMode === 2) &&
     menuButtonArmed &&
-    pointInRect(mouseX, mouseY, getMenuButtonRect(true))
+    pointInRectWithSlop(mouseX, mouseY, getMenuButtonRect(true), buttonReleaseSlop)
   ) {
     enterMenu();
     menuButtonArmed = false;
@@ -3075,11 +3089,11 @@ function mouseReleased(event) {
       !drewLine &&
       physics &&
       resetButtonArmed &&
-      pointInRect(mouseX, mouseY, getResetButtonRect(true))
+      pointInRectWithSlop(mouseX, mouseY, getResetButtonRect(true), buttonReleaseSlop)
     ) {
       loadLevel(false);
     }
-  } else if (gameMode === 2 && levelUp && resetButtonArmed && pointInRect(mouseX, mouseY, getResetButtonRect(true))) {
+  } else if (gameMode === 2 && levelUp && resetButtonArmed && pointInRectWithSlop(mouseX, mouseY, getResetButtonRect(true), buttonReleaseSlop)) {
     loadLevel(false);
   } else if ((gameMode === 0 || gameMode === 2) && player !== null && dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2) loadLevel();
   resetButtonArmed = false;
