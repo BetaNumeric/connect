@@ -1740,7 +1740,7 @@ function getResetButtonRect(expand = false) {
   const rect = { x: centerX - dia / 2, y: centerY - dia / 2, w: dia, h: dia };
   if (!expand) return rect;
   if (isTouchDevice) {
-    const pad = Math.max(20, width * 0.02);
+    const pad = Math.max(28, width * 0.03);
     return { x: rect.x - pad, y: rect.y - pad, w: rect.w + pad * 2, h: rect.h + pad * 2 };
   }
   return rect;
@@ -2509,6 +2509,23 @@ function pointInRectWithSlop(px, py, rectData, slop = 0) {
   });
 }
 
+function getPointerCanvasPosition(event) {
+  let px = mouseX;
+  let py = mouseY;
+  if (!event || !canvasRenderer || !canvasRenderer.elt) return { x: px, y: py };
+
+  const touch = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]);
+  if (!touch) return { x: px, y: py };
+
+  const rect = canvasRenderer.elt.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return { x: px, y: py };
+  const sx = width / rect.width;
+  const sy = height / rect.height;
+  px = (touch.clientX - rect.left) * sx;
+  py = (touch.clientY - rect.top) * sy;
+  return { x: px, y: py };
+}
+
 function getLevelCardGap() {
   return MENU_LEVEL_CARD_GAP_PX;
 }
@@ -2556,8 +2573,8 @@ function getMenuButtonRect(expand = false) {
   if (!expand) return rect;
   // On touch devices, enlarge only the hit area (not visuals)
   if (isTouchDevice) {
-    const padX = Math.max(20, width * 0.02);
-    const padY = Math.max(20, height * 0.02);
+    const padX = Math.max(28, width * 0.03);
+    const padY = Math.max(28, height * 0.03);
     return { x: rect.x - padX, y: rect.y - padY, w: rect.w + padX * 2, h: rect.h + padY * 2 };
   }
   return rect;
@@ -2919,41 +2936,42 @@ function mousePressed(event) {
     cancelPointerInteractionState();
     return false;
   }
-  if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+  const { x: pressX, y: pressY } = getPointerCanvasPosition(event);
+  if (!Number.isFinite(pressX) || !Number.isFinite(pressY)) {
     cancelPointerInteractionState();
     return false;
   }
   const menuRect = getMenuButtonRect(true);
-  menuButtonArmed = (gameMode === 0 || gameMode === 1 || gameMode === 2) && pointInRect(mouseX, mouseY, menuRect);
+  menuButtonArmed = (gameMode === 0 || gameMode === 1 || gameMode === 2) && pointInRect(pressX, pressY, menuRect);
   const resetRect = getResetButtonRect(true);
-  resetButtonArmed = (gameMode === 1 || (gameMode === 2 && levelUp)) && pointInRect(mouseX, mouseY, resetRect);
+  resetButtonArmed = (gameMode === 1 || (gameMode === 2 && levelUp)) && pointInRect(pressX, pressY, resetRect);
   if (gameMode === 1 && (menuButtonArmed || resetButtonArmed)) return;
   if (gameMode === 2 && (menuButtonArmed || resetButtonArmed)) return;
 
-  checkEdge();
-  if (drawPermit && gameMode === 1) linePos.push(createVector(mouseX, mouseY));
+  checkEdge(pressX, pressY);
+  if (drawPermit && gameMode === 1) linePos.push(createVector(pressX, pressY));
   if (gameMode === 4) {
     menuDragMode = "none";
     menuDragMoved = false;
-    menuDragStartX = mouseX;
-    menuDragStartY = mouseY;
+    menuDragStartX = pressX;
+    menuDragStartY = pressY;
     menuScrollbarGrabOffsetX = 0;
 
     const scrollbar = getLevelScrollbarGeometry();
-    const inTrack = pointInRect(mouseX, mouseY, scrollbar.track);
+    const inTrack = pointInRect(pressX, pressY, scrollbar.track);
     if (inTrack) {
       menuDragMode = "scrollbar";
       const handleCenterX = scrollbar.handle.x + scrollbar.handle.w / 2;
-      if (pointInRect(mouseX, mouseY, scrollbar.handle)) {
-        menuScrollbarGrabOffsetX = mouseX - handleCenterX;
+      if (pointInRect(pressX, pressY, scrollbar.handle)) {
+        menuScrollbarGrabOffsetX = pressX - handleCenterX;
       }
-      const clampedCenterX = constrain(mouseX - menuScrollbarGrabOffsetX, scrollbar.trackPadding, width - scrollbar.trackPadding);
+      const clampedCenterX = constrain(pressX - menuScrollbarGrabOffsetX, scrollbar.trackPadding, width - scrollbar.trackPadding);
       imgScroll = map(clampedCenterX, scrollbar.trackPadding, width - scrollbar.trackPadding, 0, scrollbar.minScroll);
       imgScroll = clampLevelScroll(imgScroll);
       return;
     }
 
-    const inLevelStrip = mouseY <= imgY + imgH && mouseY >= imgY - imgH;
+    const inLevelStrip = pressY <= imgY + imgH && pressY >= imgY - imgH;
     if (inLevelStrip) {
       menuDragMode = "levels";
     }
@@ -2967,27 +2985,28 @@ function mouseDragged(event) {
     cancelPointerInteractionState();
     return false;
   }
-  if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+  const { x: dragX, y: dragY } = getPointerCanvasPosition(event);
+  if (!Number.isFinite(dragX) || !Number.isFinite(dragY)) {
     cancelPointerInteractionState();
     return false;
   }
-  checkEdge();
+  checkEdge(dragX, dragY);
   if (drawPermit && gameMode === 1) {
     if (linePos.length > 0) {
       const l = linePos[linePos.length - 1];
-      if (dist(mouseX, mouseY, l.x, l.y) > d) linePos.push(createVector(mouseX, mouseY));
-    } else linePos.push(createVector(mouseX, mouseY));
+      if (dist(dragX, dragY, l.x, l.y) > d) linePos.push(createVector(dragX, dragY));
+    } else linePos.push(createVector(dragX, dragY));
   }
   if (gameMode === 4) {
     if (menuDragMode === "levels") {
-      imgScroll = clampLevelScroll(imgScroll + (mouseX - pmouseX));
+      imgScroll = clampLevelScroll(imgScroll + (dragX - pmouseX));
     } else if (menuDragMode === "scrollbar") {
       const scrollbar = getLevelScrollbarGeometry();
-      const clampedCenterX = constrain(mouseX - menuScrollbarGrabOffsetX, scrollbar.trackPadding, width - scrollbar.trackPadding);
+      const clampedCenterX = constrain(dragX - menuScrollbarGrabOffsetX, scrollbar.trackPadding, width - scrollbar.trackPadding);
       imgScroll = map(clampedCenterX, scrollbar.trackPadding, width - scrollbar.trackPadding, 0, scrollbar.minScroll);
       imgScroll = clampLevelScroll(imgScroll);
     }
-    if (!menuDragMoved && dist(mouseX, mouseY, menuDragStartX, menuDragStartY) > MENU_DRAG_THRESHOLD_PX) menuDragMoved = true;
+    if (!menuDragMoved && dist(dragX, dragY, menuDragStartX, menuDragStartY) > MENU_DRAG_THRESHOLD_PX) menuDragMoved = true;
   }
 }
 
@@ -3004,7 +3023,8 @@ function mouseClicked(event) {
     cancelPointerInteractionState();
     return false;
   }
-  if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+  const { x: clickX, y: clickY } = getPointerCanvasPosition(event);
+  if (!Number.isFinite(clickX) || !Number.isFinite(clickY)) {
     cancelPointerInteractionState();
     return false;
   }
@@ -3017,25 +3037,25 @@ function mouseClicked(event) {
       menuDragMoved = false;
       return;
     }
-    if (pointInRect(mouseX, mouseY, playerNameFieldRect)) {
+    if (pointInRect(clickX, clickY, playerNameFieldRect)) {
       promptForPlayerName();
       return;
     }
-    if (pointInRect(mouseX, mouseY, playerPrevButtonRect) && getPlayerNames().length > 1) {
+    if (pointInRect(clickX, clickY, playerPrevButtonRect) && getPlayerNames().length > 1) {
       cyclePlayer(-1);
       return;
     }
-    if (pointInRect(mouseX, mouseY, playerNextButtonRect) && getPlayerNames().length > 1) {
+    if (pointInRect(clickX, clickY, playerNextButtonRect) && getPlayerNames().length > 1) {
       cyclePlayer(1);
       return;
     }
-    if (pointInRect(mouseX, mouseY, playerDeleteButtonRect) && player !== null) {
+    if (pointInRect(clickX, clickY, playerDeleteButtonRect) && player !== null) {
       deleteCurrentPlayer();
       return;
     }
   }
 
-  if (mouseY < imgY + imgH && mouseY > imgY - imgH && gameMode === 4 && selectedLevel !== -1) {
+  if (clickY < imgY + imgH && clickY > imgY - imgH && gameMode === 4 && selectedLevel !== -1) {
     if (player === null && !promptForPlayerName()) return;
     level = selectedLevel;
     loadLevel(false);
@@ -3053,7 +3073,8 @@ function mouseReleased(event) {
     cancelPointerInteractionState();
     return false;
   }
-  if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+  const { x: releaseX, y: releaseY } = getPointerCanvasPosition(event);
+  if (!Number.isFinite(releaseX) || !Number.isFinite(releaseY)) {
     cancelPointerInteractionState();
     return false;
   }
@@ -3068,7 +3089,7 @@ function mouseReleased(event) {
   if (
     (gameMode === 0 || gameMode === 1 || gameMode === 2) &&
     menuButtonArmed &&
-    pointInRectWithSlop(mouseX, mouseY, getMenuButtonRect(true), buttonReleaseSlop)
+    pointInRectWithSlop(releaseX, releaseY, getMenuButtonRect(true), buttonReleaseSlop)
   ) {
     enterMenu();
     menuButtonArmed = false;
@@ -3089,13 +3110,13 @@ function mouseReleased(event) {
       !drewLine &&
       physics &&
       resetButtonArmed &&
-      pointInRectWithSlop(mouseX, mouseY, getResetButtonRect(true), buttonReleaseSlop)
+      pointInRectWithSlop(releaseX, releaseY, getResetButtonRect(true), buttonReleaseSlop)
     ) {
       loadLevel(false);
     }
-  } else if (gameMode === 2 && levelUp && resetButtonArmed && pointInRectWithSlop(mouseX, mouseY, getResetButtonRect(true), buttonReleaseSlop)) {
+  } else if (gameMode === 2 && levelUp && resetButtonArmed && pointInRectWithSlop(releaseX, releaseY, getResetButtonRect(true), buttonReleaseSlop)) {
     loadLevel(false);
-  } else if ((gameMode === 0 || gameMode === 2) && player !== null && dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2) loadLevel();
+  } else if ((gameMode === 0 || gameMode === 2) && player !== null && dist(releaseX, releaseY, buttonX, buttonY) < buttonW / 2) loadLevel();
   resetButtonArmed = false;
   menuButtonArmed = false;
 }
@@ -3116,7 +3137,7 @@ function touchStarted(event) {
   touchInteractionInProgress = isCanvasTouchEvent(event);
   if (!touchInteractionInProgress) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
-    mousePressed();
+    mousePressed(event);
     return false;
   }
   return false;
@@ -3133,7 +3154,7 @@ function touchMoved(event) {
   if (!touchInteractionInProgress) return true;
   if (event && !isCanvasTouchEvent(event)) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
-    mouseDragged();
+    mouseDragged(event);
     return false;
   }
   return false;
@@ -3157,13 +3178,13 @@ function touchEnded(event) {
     return true;
   }
   if (gameMode === 0 || gameMode === 1 || gameMode === 2) {
-    mouseReleased();
+    mouseReleased(event);
     touchInteractionInProgress = false;
     return false;
   }
   if (gameMode === 4) {
-    mouseReleased();
-    mouseClicked();
+    mouseReleased(event);
+    mouseClicked(event);
     touchInteractionInProgress = false;
     return false;
   }
@@ -3228,13 +3249,13 @@ function strokeBlocked(points, dia) {
   return false;
 }
 
-function checkEdge() {
+function checkEdge(px = mouseX, py = mouseY) {
   /*
     Checks if mouse or the segment to the last line coordinate goes inside
     or through another object.
   */
   drawPermit = true;
-  if (mouseX < d / 2 || mouseX > width - d / 2 || mouseY < d / 2 || mouseY > height - d / 2) {
+  if (px < d / 2 || px > width - d / 2 || py < d / 2 || py > height - d / 2) {
     drawPermit = false;
     return;
   }
@@ -3244,10 +3265,10 @@ function checkEdge() {
     const l = linePos[linePos.length - 1];
     linePosTest.push(l.copy());
     const step = Math.max(1, d * DRAW_COLLISION_STEP_FACTOR);
-    appendSegmentTestPoints(linePosTest, l.x, l.y, mouseX, mouseY, step);
+    appendSegmentTestPoints(linePosTest, l.x, l.y, px, py, step);
   }
 
-  if (brushBlockedAt(mouseX, mouseY, d)) {
+  if (brushBlockedAt(px, py, d)) {
     drawPermit = false;
     return;
   }
