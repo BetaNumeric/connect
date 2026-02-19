@@ -1,4 +1,4 @@
-const CACHE_NAME = "connect-v26";
+const CACHE_NAME = "connect-v27";
 const REMOTE_CACHE_ORIGINS = new Set(["https://cdn.jsdelivr.net"]);
 
 const CORE_ASSETS = [

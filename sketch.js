@@ -82,6 +82,7 @@ let player = null;
 let viewportScale = 1;
 let isTouchDevice = false;
 let touchInteractionInProgress = false;
+let multiTouchBlockActive = false;
 let playerNameFieldRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerPrevButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerNextButtonRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -2838,6 +2839,26 @@ function isCanvasTouchEvent(event) {
   return false;
 }
 
+function getEventTouchCount(event) {
+  const eventTouches = event?.touches;
+  if (eventTouches && typeof eventTouches.length === "number") return eventTouches.length;
+  if (typeof touches !== "undefined" && Array.isArray(touches)) return touches.length;
+  return 0;
+}
+
+function shouldBlockTouchInteraction(event) {
+  const count = getEventTouchCount(event);
+  if (count > 1) {
+    multiTouchBlockActive = true;
+    return true;
+  }
+  if (multiTouchBlockActive) {
+    if (count === 0) multiTouchBlockActive = false;
+    return true;
+  }
+  return false;
+}
+
 function mousePressed() {
   // Adds first coordinate to linePos when the mouse is pressed.
   if (isHtmlLevelMenuActive()) return true;
@@ -3012,6 +3033,14 @@ function touchStarted(event) {
     touchInteractionInProgress = false;
     return true;
   }
+  if (shouldBlockTouchInteraction(event)) {
+    touchInteractionInProgress = false;
+    menuButtonArmed = false;
+    resetButtonArmed = false;
+    linePos = [];
+    linePosTest = [];
+    return false;
+  }
   touchInteractionInProgress = isCanvasTouchEvent(event);
   if (!touchInteractionInProgress) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
@@ -3023,6 +3052,12 @@ function touchStarted(event) {
 
 function touchMoved(event) {
   if (isHtmlLevelMenuActive()) return true;
+  if (shouldBlockTouchInteraction(event)) {
+    touchInteractionInProgress = false;
+    linePos = [];
+    linePosTest = [];
+    return false;
+  }
   if (!touchInteractionInProgress) return true;
   if (event && !isCanvasTouchEvent(event)) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
@@ -3036,6 +3071,14 @@ function touchEnded(event) {
   if (isHtmlLevelMenuActive()) {
     touchInteractionInProgress = false;
     return true;
+  }
+  if (shouldBlockTouchInteraction(event)) {
+    touchInteractionInProgress = false;
+    menuButtonArmed = false;
+    resetButtonArmed = false;
+    linePos = [];
+    linePosTest = [];
+    return false;
   }
   if (!touchInteractionInProgress) {
     touchInteractionInProgress = false;
