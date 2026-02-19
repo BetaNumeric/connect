@@ -20,6 +20,10 @@
       --safe-right: env(safe-area-inset-right, 0px);
       --safe-bottom: env(safe-area-inset-bottom, 0px);
       --safe-left: env(safe-area-inset-left, 0px);
+      --ui-black: #111111;
+      --ui-white: #ffffff;
+      --ui-gray-mid: #7f7f7f;
+      --ui-gray-light: #c8c8c8;
     }
 
     html,
@@ -46,6 +50,305 @@
       display: block;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
       touch-action: none;
+    }
+
+    #level-menu-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      background: var(--ui-gray-light);
+      padding:
+        calc(var(--safe-top) + 16px)
+        var(--safe-right)
+        calc(var(--safe-bottom) + 16px)
+        var(--safe-left);
+      box-sizing: border-box;
+      pointer-events: none;
+    }
+
+    #level-menu-overlay,
+    #level-menu-overlay * {
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #level-menu-overlay.is-visible {
+      display: block;
+      pointer-events: auto;
+    }
+
+    #level-menu-shell {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      display: grid;
+      grid-template-rows: minmax(72px, 1fr) auto minmax(56px, 1fr);
+      row-gap: 14px;
+      color: var(--ui-black);
+    }
+
+    #level-menu-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+
+    #level-menu-player {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: min(720px, 100%);
+      margin: 0 auto;
+    }
+
+    .menu-player-btn,
+    .menu-player-name {
+      border: 0;
+      border-radius: 10px;
+      background: var(--ui-white);
+      color: var(--ui-black);
+      font-weight: 600;
+      cursor: pointer;
+      outline: none;
+      box-shadow: none;
+      transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+    }
+
+    .menu-player-btn {
+      appearance: none;
+      -webkit-appearance: none;
+      display: grid;
+      place-items: center;
+      width: 52px;
+      min-width: 52px;
+      height: 52px;
+      min-height: 52px;
+      font-size: 35px;
+      line-height: 0;
+      padding: 0;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    .menu-player-icon {
+      display: block;
+      width: 24px;
+      height: 24px;
+      pointer-events: none;
+    }
+
+    .menu-player-btn:hover,
+    .menu-player-name:hover {
+      background: var(--ui-black);
+      color: var(--ui-white);
+    }
+
+    .menu-player-btn:disabled {
+      background: #e6e6e6;
+      color: #666666;
+      cursor: default;
+    }
+
+    .menu-player-btn:disabled:hover {
+      background: #e6e6e6;
+      color: #666666;
+    }
+
+    .menu-player-name {
+      flex: 1;
+      text-align: center;
+      font-size: 20px;
+      line-height: 1;
+      padding: 0 14px;
+      height: 52px;
+      min-height: 52px;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #level-menu-list {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0;
+      scroll-snap-type: x mandatory;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      cursor: grab;
+      touch-action: none;
+    }
+
+    #level-menu-list::-webkit-scrollbar {
+      display: none;
+      width: 0;
+      height: 0;
+    }
+
+    #level-menu-list.is-dragging {
+      cursor: grabbing;
+      scroll-snap-type: none;
+    }
+
+    #level-menu-scrollbar {
+      position: relative;
+      align-self: center;
+      width: 100%;
+      height: 22px;
+      background: var(--ui-white);
+      border: 0;
+      border-radius: 0;
+      cursor: pointer;
+      outline: none;
+      box-shadow: none;
+      touch-action: none;
+    }
+
+    #level-menu-scrollbar-handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      min-width: 72px;
+      background: var(--ui-gray-mid);
+      border: 0;
+      border-radius: 0;
+      cursor: grab;
+      outline: none;
+      box-shadow: none;
+      touch-action: none;
+    }
+
+    #level-menu-scrollbar-handle.is-dragging {
+      cursor: grabbing;
+    }
+
+    .level-menu-card {
+      border: 1px solid var(--ui-black);
+      background: var(--ui-white);
+      border-radius: 0;
+      padding: 0;
+      color: var(--ui-black);
+      text-align: left;
+      overflow: hidden;
+      cursor: pointer;
+      display: grid;
+      grid-template-rows: auto auto;
+      scroll-snap-align: start;
+      flex: 0 0 clamp(250px, 29vw, 390px);
+      transition: border-width 120ms ease;
+    }
+
+    .level-menu-card:hover,
+    .level-menu-card:focus-visible {
+      border-width: 2px;
+      outline: none;
+    }
+
+    .level-menu-card.is-current {
+      border-width: 2px;
+    }
+
+    .level-menu-preview {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background: var(--ui-white);
+      border-bottom: 1px solid var(--ui-black);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .level-menu-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+
+    .level-menu-preview-empty {
+      color: #666666;
+      font-size: 13px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .level-menu-label {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: rgba(17, 17, 17, 0.8);
+      color: var(--ui-white);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      line-height: 1;
+    }
+
+    .level-menu-score {
+      background: var(--ui-gray-mid);
+      color: var(--ui-white);
+      padding: 10px 12px 12px;
+      font-size: 13px;
+      line-height: 1.35;
+      display: grid;
+      gap: 4px;
+    }
+
+    @media (max-width: 720px) {
+      #level-menu-overlay {
+        padding:
+          calc(var(--safe-top) + 12px)
+          var(--safe-right)
+          calc(var(--safe-bottom) + 12px)
+          var(--safe-left);
+      }
+
+      #level-menu-shell {
+        grid-template-rows: minmax(56px, 1fr) auto minmax(44px, 1fr);
+        row-gap: 10px;
+      }
+
+      #level-menu-player {
+        width: 100%;
+      }
+
+      .menu-player-btn {
+        width: 46px;
+        min-width: 46px;
+        height: 46px;
+        min-height: 46px;
+        font-size: 30px;
+      }
+
+      .menu-player-name {
+        height: 46px;
+        min-height: 46px;
+        font-size: 16px;
+        padding: 0 10px;
+      }
+
+      #level-menu-scrollbar {
+        height: 20px;
+      }
+
+      #level-menu-list {
+        gap: 10px;
+      }
+
+      .level-menu-card {
+        flex-basis: min(78vw, 340px);
+      }
     }
 
     #ios-install-overlay {
@@ -106,6 +409,35 @@
       <button id="ios-close-btn" type="button">Close</button>
     </div>
   </div>
+
+  <section id="level-menu-overlay" aria-hidden="true" aria-label="Level Menu">
+    <div id="level-menu-shell">
+      <header id="level-menu-header">
+        <div id="level-menu-player">
+          <button id="menu-player-prev" class="menu-player-btn" type="button" aria-label="Previous player">
+            <svg class="menu-player-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M14.5 5 L8.5 12 L14.5 19" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square" stroke-linejoin="miter"></path>
+            </svg>
+          </button>
+          <button id="menu-player-name" class="menu-player-name" type="button">Set Player Name</button>
+          <button id="menu-player-next" class="menu-player-btn" type="button" aria-label="Next player">
+            <svg class="menu-player-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M9.5 5 L15.5 12 L9.5 19" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square" stroke-linejoin="miter"></path>
+            </svg>
+          </button>
+          <button id="menu-player-delete" class="menu-player-btn" type="button" aria-label="Delete player">
+            <svg class="menu-player-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M7 7 L17 17 M17 7 L7 17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+      <div id="level-menu-list" role="list" aria-label="Levels"></div>
+      <div id="level-menu-scrollbar" role="presentation" aria-hidden="true">
+        <div id="level-menu-scrollbar-handle"></div>
+      </div>
+    </div>
+  </section>
 
   <script>
     window.isMobileDevice = window.isMobileDevice || function isMobileDevice() {

@@ -94,6 +94,8 @@ let menuDragStartY = 0;
 let menuScrollbarGrabOffsetX = 0;
 let scoreStore = { rows: [], activeRowId: null };
 let editorTestMode = false;
+let htmlMenuUi = null;
+let htmlMenuVisible = false;
 
 class B2D {
   // Adapter to mimic Processing's Box2D helper API in p5.js.
@@ -1087,6 +1089,7 @@ function setup() {
   if (row) player = row.name;
   // Detect touch-capable devices to adapt hit targets without changing visuals
   try { isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0); } catch (e) { isTouchDevice = false; }
+  getHtmlMenuUi();
 
   if (editorTestMode) {
     if (!player) player = "Editor Test";
@@ -1106,6 +1109,7 @@ function setup() {
         loadStoredPreviews();
         scoreStore.rows = scoreStore.rows.map(normalizeRow);
         if (level > getMaxLevelIndex()) level = 0;
+        if (gameMode === 4) refreshHtmlLevelMenu(false);
         console.info(`Loaded ${getLevelCount()} levels from manifest/data files.`);
       })
       .catch((err) => {
@@ -1361,12 +1365,6 @@ function renderLevelPreview(def, index) {
   for (const obj of rotorsLocal) drawPreviewRotor(g, obj);
   for (const obj of circlesLocal) drawPreviewCircle(g, obj);
 
-  // Level label.
-  g.noStroke();
-  g.fill(COLOR_BLACK, 160);
-  g.textAlign(LEFT, TOP);
-  g.textSize(12);
-  g.text(`L${index + 1}`, 6, 4);
   return g;
 }
 
@@ -1606,6 +1604,7 @@ function drawPreviewRotorHubGear(g, x, y, radius, spinDeg = 0) {
 
 function draw() {
   // Main game loop.
+  const htmlMenuDrawn = syncHtmlLevelMenuVisibility();
   background(COLOR_WHITE);
   fill(COLOR_BLACK);
   if (info) {
@@ -1627,7 +1626,7 @@ function draw() {
   if (gameMode === 2) drawResultMode();
   if ((gameMode === 1 && physics) || (gameMode === 2 && levelUp)) drawResetButton();
   if (gameMode === 0 || gameMode === 1 || gameMode === 2) drawGlobalMenuButton();
-  if (gameMode === 4) drawLevelMenu();
+  if (gameMode === 4 && !htmlMenuDrawn) drawLevelMenu();
   if (gameMode === 5) {
     if (editorTestMode) {
       level = 0;
@@ -1787,6 +1786,400 @@ function drawNextIcon(x, y, size, shade) {
   drawPlayTriangle(-size * 0.1, 0, side);
   drawPlayTriangle(size * 0.2, 0, side);
   pop();
+}
+
+function getHtmlMenuUi() {
+  if (htmlMenuUi) return htmlMenuUi;
+  if (typeof document === "undefined") return null;
+
+  const overlay = document.getElementById("level-menu-overlay");
+  const levelList = document.getElementById("level-menu-list");
+  const scrollbarTrack = document.getElementById("level-menu-scrollbar");
+  const scrollbarHandle = document.getElementById("level-menu-scrollbar-handle");
+  const playerNameButton = document.getElementById("menu-player-name");
+  const prevButton = document.getElementById("menu-player-prev");
+  const nextButton = document.getElementById("menu-player-next");
+  const deleteButton = document.getElementById("menu-player-delete");
+  if (!overlay || !levelList || !scrollbarTrack || !scrollbarHandle || !playerNameButton || !prevButton || !nextButton || !deleteButton) return null;
+
+  htmlMenuUi = {
+    overlay,
+    levelList,
+    scrollbarTrack,
+    scrollbarHandle,
+    playerNameButton,
+    prevButton,
+    nextButton,
+    deleteButton,
+  };
+
+  const dragState = {
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startCard: null,
+    startScrollLeft: 0,
+    moved: false,
+    blockNextClick: false,
+  };
+  const scrollbarDragState = {
+    active: false,
+    pointerId: null,
+    grabOffsetX: 0,
+  };
+
+  const CARD_TAP_DRAG_THRESHOLD_PX = 8;
+  const clampNumber = (value, minValue, maxValue) => Math.max(minValue, Math.min(maxValue, value));
+  const getLevelCardAtClientPoint = (clientX, clientY) => {
+    if (typeof document === "undefined") return null;
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    const hit = document.elementFromPoint(clientX, clientY);
+    if (!hit || typeof hit.closest !== "function") return null;
+    return hit.closest(".level-menu-card");
+  };
+  const tryOpenLevelCardElement = (card) => {
+    if (!card) return false;
+    const levelIndex = Number(card.dataset.level);
+    if (!Number.isInteger(levelIndex)) return false;
+    openLevelFromHtmlMenu(levelIndex);
+    return true;
+  };
+  const getScrollbarMetrics = () => {
+    const trackWidth = Math.max(0, Math.round(scrollbarTrack.clientWidth));
+    const viewportWidth = Math.max(0, Math.round(levelList.clientWidth));
+    const contentWidth = Math.max(0, Math.round(levelList.scrollWidth));
+    const maxScrollLeft = Math.max(0, contentWidth - viewportWidth);
+    const handleMinWidth = 72;
+    const handleWidth = maxScrollLeft <= 0 || contentWidth <= 0
+      ? trackWidth
+      : clampNumber(Math.round((viewportWidth / contentWidth) * trackWidth), handleMinWidth, trackWidth);
+    const maxHandleLeft = Math.max(0, trackWidth - handleWidth);
+    return { trackWidth, maxScrollLeft, handleWidth, maxHandleLeft };
+  };
+  const updateScrollbarFromLevelList = () => {
+    const { trackWidth, maxScrollLeft, handleWidth, maxHandleLeft } = getScrollbarMetrics();
+    if (trackWidth <= 0) return;
+
+    if (maxScrollLeft <= 0) {
+      scrollbarTrack.style.opacity = "0.55";
+      scrollbarHandle.style.width = `${trackWidth}px`;
+      scrollbarHandle.style.left = "0px";
+      return;
+    }
+
+    const ratio = clampNumber(levelList.scrollLeft / maxScrollLeft, 0, 1);
+    const handleLeft = Math.round(maxHandleLeft * ratio);
+    scrollbarTrack.style.opacity = "1";
+    scrollbarHandle.style.width = `${handleWidth}px`;
+    scrollbarHandle.style.left = `${handleLeft}px`;
+  };
+  const setLevelListScrollFromClientX = (clientX, grabOffsetX = null) => {
+    const { maxScrollLeft, handleWidth, maxHandleLeft } = getScrollbarMetrics();
+    if (maxScrollLeft <= 0) {
+      levelList.scrollLeft = 0;
+      updateScrollbarFromLevelList();
+      return;
+    }
+
+    const trackRect = scrollbarTrack.getBoundingClientRect();
+    const targetOffset = Number.isFinite(grabOffsetX) ? grabOffsetX : handleWidth / 2;
+    const handleLeft = clampNumber(clientX - trackRect.left - targetOffset, 0, maxHandleLeft);
+    const ratio = maxHandleLeft <= 0 ? 0 : handleLeft / maxHandleLeft;
+    levelList.scrollLeft = ratio * maxScrollLeft;
+    updateScrollbarFromLevelList();
+  };
+  htmlMenuUi.updateScrollbar = updateScrollbarFromLevelList;
+
+  const stopPropagation = (event) => {
+    if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+  };
+  for (const el of [overlay, levelList, scrollbarTrack, playerNameButton, prevButton, nextButton, deleteButton]) {
+    el.addEventListener("pointerdown", stopPropagation);
+    el.addEventListener("pointerup", stopPropagation);
+    el.addEventListener("touchstart", stopPropagation, { passive: true });
+    el.addEventListener("touchmove", stopPropagation, { passive: true });
+    el.addEventListener("touchend", stopPropagation, { passive: false });
+  }
+
+  playerNameButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    promptForPlayerName();
+    refreshHtmlLevelMenu();
+  });
+  prevButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    cyclePlayer(-1);
+    refreshHtmlLevelMenu();
+  });
+  nextButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    cyclePlayer(1);
+    refreshHtmlLevelMenu();
+  });
+  deleteButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    deleteCurrentPlayer();
+    refreshHtmlLevelMenu();
+  });
+
+  const endLevelListDrag = (event) => {
+    if (!dragState.active || event.pointerId !== dragState.pointerId) return;
+    const cardAtPointer = getLevelCardAtClientPoint(event.clientX, event.clientY);
+    const candidateCard = cardAtPointer || dragState.startCard;
+    const opened = !dragState.moved && tryOpenLevelCardElement(candidateCard);
+    dragState.blockNextClick = opened || dragState.moved;
+    if (dragState.blockNextClick) setTimeout(() => { dragState.blockNextClick = false; }, 0);
+    dragState.active = false;
+    dragState.pointerId = null;
+    dragState.startX = 0;
+    dragState.startY = 0;
+    dragState.startCard = null;
+    dragState.moved = false;
+    levelList.classList.remove("is-dragging");
+    if (typeof levelList.releasePointerCapture === "function") {
+      try { levelList.releasePointerCapture(event.pointerId); } catch {}
+    }
+  };
+  levelList.addEventListener("pointerdown", (event) => {
+    if (typeof event.button === "number" && event.button !== 0) return;
+    dragState.active = true;
+    dragState.pointerId = event.pointerId;
+    dragState.startX = event.clientX;
+    dragState.startY = event.clientY;
+    dragState.startCard = event.target && typeof event.target.closest === "function"
+      ? event.target.closest(".level-menu-card")
+      : null;
+    dragState.startScrollLeft = levelList.scrollLeft;
+    dragState.moved = false;
+    dragState.blockNextClick = false;
+    levelList.classList.add("is-dragging");
+    if (typeof levelList.setPointerCapture === "function") {
+      try { levelList.setPointerCapture(event.pointerId); } catch {}
+    }
+  });
+  levelList.addEventListener("pointermove", (event) => {
+    if (!dragState.active || event.pointerId !== dragState.pointerId) return;
+    const deltaX = event.clientX - dragState.startX;
+    const deltaY = event.clientY - dragState.startY;
+    if (!dragState.moved && (Math.abs(deltaX) > CARD_TAP_DRAG_THRESHOLD_PX || Math.abs(deltaY) > CARD_TAP_DRAG_THRESHOLD_PX)) {
+      dragState.moved = true;
+    }
+    if (!dragState.moved) return;
+    dragState.blockNextClick = true;
+    levelList.scrollLeft = dragState.startScrollLeft - deltaX;
+    updateScrollbarFromLevelList();
+    event.preventDefault();
+  });
+  levelList.addEventListener("pointerup", endLevelListDrag);
+  levelList.addEventListener("pointercancel", endLevelListDrag);
+
+  const endScrollbarDrag = (event) => {
+    if (!scrollbarDragState.active || event.pointerId !== scrollbarDragState.pointerId) return;
+    scrollbarDragState.active = false;
+    scrollbarDragState.pointerId = null;
+    scrollbarHandle.classList.remove("is-dragging");
+    if (typeof scrollbarTrack.releasePointerCapture === "function") {
+      try { scrollbarTrack.releasePointerCapture(event.pointerId); } catch {}
+    }
+  };
+  scrollbarTrack.addEventListener("pointerdown", (event) => {
+    if (typeof event.button === "number" && event.button !== 0) return;
+    const handleRect = scrollbarHandle.getBoundingClientRect();
+    const target = event.target;
+    const hitHandle = target === scrollbarHandle || (target && typeof target.closest === "function" && target.closest("#level-menu-scrollbar-handle"));
+    scrollbarDragState.active = true;
+    scrollbarDragState.pointerId = event.pointerId;
+    scrollbarDragState.grabOffsetX = hitHandle ? (event.clientX - handleRect.left) : handleRect.width / 2;
+    scrollbarHandle.classList.add("is-dragging");
+    setLevelListScrollFromClientX(event.clientX, scrollbarDragState.grabOffsetX);
+    if (typeof scrollbarTrack.setPointerCapture === "function") {
+      try { scrollbarTrack.setPointerCapture(event.pointerId); } catch {}
+    }
+    event.preventDefault();
+  });
+  scrollbarTrack.addEventListener("pointermove", (event) => {
+    if (!scrollbarDragState.active || event.pointerId !== scrollbarDragState.pointerId) return;
+    setLevelListScrollFromClientX(event.clientX, scrollbarDragState.grabOffsetX);
+    event.preventDefault();
+  });
+  scrollbarTrack.addEventListener("pointerup", endScrollbarDrag);
+  scrollbarTrack.addEventListener("pointercancel", endScrollbarDrag);
+
+  levelList.addEventListener("click", (event) => {
+    if (dragState.blockNextClick) {
+      dragState.blockNextClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    const target = event.target;
+    if (!target || typeof target.closest !== "function") return;
+    const card = target.closest(".level-menu-card");
+    if (!card) return;
+    const levelIndex = Number(card.dataset.level);
+    if (!Number.isInteger(levelIndex)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openLevelFromHtmlMenu(levelIndex);
+  });
+
+  levelList.addEventListener("wheel", (event) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    levelList.scrollLeft += event.deltaY;
+    updateScrollbarFromLevelList();
+    event.preventDefault();
+  }, { passive: false });
+
+  levelList.addEventListener("scroll", () => {
+    updateScrollbarFromLevelList();
+  }, { passive: true });
+
+  requestAnimationFrame(() => {
+    updateScrollbarFromLevelList();
+  });
+
+  return htmlMenuUi;
+}
+
+function isHtmlLevelMenuActive() {
+  return htmlMenuVisible && gameMode === 4;
+}
+
+function levelPreviewToDataUrl(preview) {
+  if (!preview) return "";
+  try {
+    if (preview.canvas && typeof preview.canvas.toDataURL === "function") return preview.canvas.toDataURL("image/png");
+    if (preview.elt && typeof preview.elt.toDataURL === "function") return preview.elt.toDataURL("image/png");
+  } catch {}
+  return "";
+}
+
+function setHtmlLevelMenuVisible(visible) {
+  const ui = getHtmlMenuUi();
+  if (!ui) {
+    htmlMenuVisible = false;
+    return;
+  }
+
+  htmlMenuVisible = Boolean(visible);
+  ui.overlay.classList.toggle("is-visible", htmlMenuVisible);
+  ui.overlay.setAttribute("aria-hidden", htmlMenuVisible ? "false" : "true");
+  if (htmlMenuVisible && typeof ui.updateScrollbar === "function") {
+    requestAnimationFrame(() => {
+      ui.updateScrollbar();
+    });
+  }
+}
+
+function openLevelFromHtmlMenu(levelIndex) {
+  if (!Number.isInteger(levelIndex) || levelIndex < 0 || levelIndex > getMaxLevelIndex()) return;
+  if (player === null && !promptForPlayerName()) {
+    refreshHtmlLevelMenu();
+    return;
+  }
+  level = levelIndex;
+  loadLevel(false);
+  gameMode = 0;
+  setHtmlLevelMenuVisible(false);
+}
+
+function refreshHtmlLevelMenu(preserveScroll = true) {
+  const ui = getHtmlMenuUi();
+  if (!ui) return false;
+
+  const names = getPlayerNames();
+  const hasPlayer = player !== null;
+  ui.playerNameButton.textContent = hasPlayer ? player : "Set Player Name";
+  ui.prevButton.disabled = names.length <= 1;
+  ui.nextButton.disabled = names.length <= 1;
+  ui.deleteButton.disabled = !hasPlayer;
+
+  const scrollLeft = preserveScroll ? ui.levelList.scrollLeft : 0;
+  const fragment = document.createDocumentFragment();
+  for (let i = 0; i < getLevelCount(); i++) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "level-menu-card";
+    if (i === level) card.classList.add("is-current");
+    card.dataset.level = String(i);
+
+    const previewWrap = document.createElement("div");
+    previewWrap.className = "level-menu-preview";
+    const previewData = levelPreviewToDataUrl(levelImg[i]);
+    if (previewData) {
+      const previewImg = document.createElement("img");
+      previewImg.src = previewData;
+      previewImg.alt = `Level ${i + 1} preview`;
+      previewImg.loading = "lazy";
+      previewImg.decoding = "async";
+      previewWrap.appendChild(previewImg);
+    } else {
+      const previewEmpty = document.createElement("span");
+      previewEmpty.className = "level-menu-preview-empty";
+      previewEmpty.textContent = "No Preview";
+      previewWrap.appendChild(previewEmpty);
+    }
+
+    const levelLabel = document.createElement("span");
+    levelLabel.className = "level-menu-label";
+    levelLabel.textContent = `Level ${i + 1}`;
+    previewWrap.appendChild(levelLabel);
+
+    calcScore(i);
+    const scoreWrap = document.createElement("div");
+    scoreWrap.className = "level-menu-score";
+
+    const fewestLine = document.createElement("span");
+    fewestLine.textContent =
+      minLines > 0 && playerMinLines
+        ? formatFewestScore(playerMinLines, minLines)
+        : "fewest: -";
+    const fastestLine = document.createElement("span");
+    fastestLine.textContent =
+      minTime > 0 && playerMinTime
+        ? formatFastestScore(playerMinTime, minTime)
+        : "fastest: -";
+    scoreWrap.appendChild(fewestLine);
+    scoreWrap.appendChild(fastestLine);
+
+    card.appendChild(previewWrap);
+    card.appendChild(scoreWrap);
+    fragment.appendChild(card);
+  }
+
+  ui.levelList.replaceChildren(fragment);
+  ui.levelList.scrollLeft = scrollLeft;
+  if (typeof ui.updateScrollbar === "function") {
+    requestAnimationFrame(() => {
+      ui.updateScrollbar();
+    });
+  }
+  return true;
+}
+
+function syncHtmlLevelMenuVisibility() {
+  const ui = getHtmlMenuUi();
+  if (!ui) {
+    htmlMenuVisible = false;
+    return false;
+  }
+
+  if (gameMode === 4) {
+    if (!htmlMenuVisible) {
+      setHtmlLevelMenuVisible(true);
+      refreshHtmlLevelMenu(false);
+    }
+    if (typeof ui.updateScrollbar === "function") ui.updateScrollbar();
+    return true;
+  }
+
+  if (htmlMenuVisible) setHtmlLevelMenuVisible(false);
+  return false;
 }
 
 function drawLevelMenu() {
@@ -2014,6 +2407,7 @@ function enterMenu() {
   linePos = [];
   linePosTest = [];
   gameMode = 4;
+  refreshHtmlLevelMenu(false);
 }
 
 function getPlayerNames() {
@@ -2159,7 +2553,10 @@ function loadStoredPreviews() {
   // Load persisted level thumbnails from localStorage.
   for (let i = 0; i <= getMaxLevelIndex(); i++) {
     const data = localStorage.getItem(previewKey(i));
-    if (data) loadImage(data, (img) => { levelImg[i] = img; }, () => {});
+    if (data) loadImage(data, (img) => {
+      levelImg[i] = img;
+      if (gameMode === 4) refreshHtmlLevelMenu();
+    }, () => {});
   }
 }
 function saveLevelPreview(i) {
@@ -2168,7 +2565,10 @@ function saveLevelPreview(i) {
   try {
     const data = canvasRenderer.elt.toDataURL("image/png");
     localStorage.setItem(previewKey(i), data);
-    loadImage(data, (img) => { levelImg[i] = img; }, () => {});
+    loadImage(data, (img) => {
+      levelImg[i] = img;
+      if (gameMode === 4) refreshHtmlLevelMenu();
+    }, () => {});
   } catch {}
 }
 
@@ -2259,7 +2659,7 @@ function isCanvasTouchEvent(event) {
   const target = event?.target;
 
   if (target && typeof target.closest === "function") {
-    if (target.closest("#a2hs-banner, #ios-install-overlay")) return false;
+    if (target.closest("#a2hs-banner, #ios-install-overlay, #level-menu-overlay")) return false;
     const targetCanvas = target.closest("canvas");
     if (targetCanvas === canvasEl) return true;
   }
@@ -2289,6 +2689,7 @@ function isCanvasTouchEvent(event) {
 
 function mousePressed() {
   // Adds first coordinate to linePos when the mouse is pressed.
+  if (isHtmlLevelMenuActive()) return true;
   if (!isPrimaryPointerButton()) {
     menuButtonArmed = false;
     resetButtonArmed = false;
@@ -2333,6 +2734,7 @@ function mousePressed() {
 
 function mouseDragged() {
   // Adds coordinates to linePos while dragging.
+  if (isHtmlLevelMenuActive()) return true;
   if (!isPrimaryPointerButton()) return false;
   checkEdge();
   if (drawPermit && gameMode === 1) {
@@ -2355,12 +2757,14 @@ function mouseDragged() {
 }
 
 function mouseWheel(e) {
+  if (isHtmlLevelMenuActive()) return true;
   const c = e.deltaY === 0 ? 0 : Math.sign(e.deltaY);
   if (gameMode === 4 && c !== 0) imgScroll = clampLevelScroll(imgScroll + c * MENU_SCROLL_STEP_PX);
   return false;
 }
 
 function mouseClicked() {
+  if (isHtmlLevelMenuActive()) return true;
   if (!isPrimaryPointerButton()) return false;
   /*
     Checks if a button is clicked and reloads/selects level. This avoids
@@ -2402,6 +2806,7 @@ function mouseReleased() {
     If gameMode is 1, convert drawn coordinates into a physical line.
     Otherwise handle button clicks to reset/load level.
   */
+  if (isHtmlLevelMenuActive()) return true;
   if (!isPrimaryPointerButton()) {
     if (gameMode === 4) {
       menuDragMode = "none";
@@ -2452,6 +2857,10 @@ function mouseReleased() {
 }
 
 function touchStarted(event) {
+  if (isHtmlLevelMenuActive()) {
+    touchInteractionInProgress = false;
+    return true;
+  }
   touchInteractionInProgress = isCanvasTouchEvent(event);
   if (!touchInteractionInProgress) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
@@ -2462,6 +2871,7 @@ function touchStarted(event) {
 }
 
 function touchMoved(event) {
+  if (isHtmlLevelMenuActive()) return true;
   if (!touchInteractionInProgress) return true;
   if (event && !isCanvasTouchEvent(event)) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
@@ -2472,6 +2882,10 @@ function touchMoved(event) {
 }
 
 function touchEnded(event) {
+  if (isHtmlLevelMenuActive()) {
+    touchInteractionInProgress = false;
+    return true;
+  }
   if (!touchInteractionInProgress) {
     touchInteractionInProgress = false;
     return true;
