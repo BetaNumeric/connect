@@ -1943,6 +1943,19 @@ function getHtmlMenuUi() {
     updateLevelCardWidthForHeight();
     updateScrollbarFromLevelList();
   };
+  let menuLayoutRafId = 0;
+  const requestMenuLayoutUpdate = () => {
+    if (menuLayoutRafId !== 0) return;
+    menuLayoutRafId = requestAnimationFrame(() => {
+      menuLayoutRafId = 0;
+      updateMenuLayout();
+    });
+  };
+  const scheduleMenuLayoutSettle = () => {
+    requestMenuLayoutUpdate();
+    setTimeout(requestMenuLayoutUpdate, 90);
+    setTimeout(requestMenuLayoutUpdate, 220);
+  };
   const handleMenuWheelEvent = (event) => {
     if (!isHtmlLevelMenuActive()) return;
     if (event?.ctrlKey) return;
@@ -1995,6 +2008,7 @@ function getHtmlMenuUi() {
   };
   htmlMenuUi.updateScrollbar = updateScrollbarFromLevelList;
   htmlMenuUi.updateLayout = updateMenuLayout;
+  htmlMenuUi.scheduleLayoutSettle = scheduleMenuLayoutSettle;
 
   const stopPropagation = (event) => {
     if (event && typeof event.stopPropagation === "function") event.stopPropagation();
@@ -2141,14 +2155,24 @@ function getHtmlMenuUi() {
 
   window.addEventListener("resize", () => {
     if (!isHtmlLevelMenuActive()) return;
-    requestAnimationFrame(() => {
-      updateMenuLayout();
+    scheduleMenuLayoutSettle();
+  });
+  window.addEventListener("orientationchange", () => {
+    if (!isHtmlLevelMenuActive()) return;
+    scheduleMenuLayoutSettle();
+  });
+  if (typeof window !== "undefined" && window.visualViewport) {
+    window.visualViewport.addEventListener("resize", () => {
+      if (!isHtmlLevelMenuActive()) return;
+      scheduleMenuLayoutSettle();
     });
-  });
+    window.visualViewport.addEventListener("scroll", () => {
+      if (!isHtmlLevelMenuActive()) return;
+      scheduleMenuLayoutSettle();
+    });
+  }
 
-  requestAnimationFrame(() => {
-    updateMenuLayout();
-  });
+  scheduleMenuLayoutSettle();
 
   return htmlMenuUi;
 }
@@ -2176,10 +2200,13 @@ function setHtmlLevelMenuVisible(visible) {
   htmlMenuVisible = Boolean(visible);
   ui.overlay.classList.toggle("is-visible", htmlMenuVisible);
   ui.overlay.setAttribute("aria-hidden", htmlMenuVisible ? "false" : "true");
-  if (htmlMenuVisible && typeof ui.updateLayout === "function") {
-    requestAnimationFrame(() => {
-      ui.updateLayout();
-    });
+  if (htmlMenuVisible) {
+    if (typeof ui.scheduleLayoutSettle === "function") ui.scheduleLayoutSettle();
+    else if (typeof ui.updateLayout === "function") {
+      requestAnimationFrame(() => {
+        ui.updateLayout();
+      });
+    }
   }
 }
 
@@ -2277,7 +2304,9 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
 
   ui.levelList.replaceChildren(fragment);
   ui.levelList.scrollLeft = scrollLeft;
-  if (typeof ui.updateLayout === "function") {
+  if (typeof ui.scheduleLayoutSettle === "function") {
+    ui.scheduleLayoutSettle();
+  } else if (typeof ui.updateLayout === "function") {
     requestAnimationFrame(() => {
       ui.updateLayout();
     });
@@ -2797,8 +2826,10 @@ function keyPressed() {
   return true;
 }
 
-function isPrimaryPointerButton() {
+function isPrimaryPointerButton(event = null) {
   if (touchInteractionInProgress) return true;
+  if (event && typeof event.buttons === "number" && event.buttons !== 0) return event.buttons === 1;
+  if (event && typeof event.button === "number") return event.button === 0;
   if (typeof mouseButton === "undefined") return true;
   if (typeof mouseButton === "number") return mouseButton === 0;
   if (typeof mouseButton === "string") return mouseButton.toLowerCase() === "left";
@@ -2859,12 +2890,26 @@ function shouldBlockTouchInteraction(event) {
   return false;
 }
 
-function mousePressed() {
+function cancelPointerInteractionState() {
+  linePos = [];
+  linePosTest = [];
+  drawPermit = false;
+  menuDragMode = "none";
+  menuDragMoved = false;
+  menuScrollbarGrabOffsetX = 0;
+  menuButtonArmed = false;
+  resetButtonArmed = false;
+}
+
+function mousePressed(event) {
   // Adds first coordinate to linePos when the mouse is pressed.
   if (isHtmlLevelMenuActive()) return true;
-  if (!isPrimaryPointerButton()) {
-    menuButtonArmed = false;
-    resetButtonArmed = false;
+  if (!isPrimaryPointerButton(event)) {
+    cancelPointerInteractionState();
+    return false;
+  }
+  if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+    cancelPointerInteractionState();
     return false;
   }
   const menuRect = getMenuButtonRect(true);
@@ -2904,10 +2949,17 @@ function mousePressed() {
   }
 }
 
-function mouseDragged() {
+function mouseDragged(event) {
   // Adds coordinates to linePos while dragging.
   if (isHtmlLevelMenuActive()) return true;
-  if (!isPrimaryPointerButton()) return false;
+  if (!isPrimaryPointerButton(event)) {
+    cancelPointerInteractionState();
+    return false;
+  }
+  if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+    cancelPointerInteractionState();
+    return false;
+  }
   checkEdge();
   if (drawPermit && gameMode === 1) {
     if (linePos.length > 0) {
@@ -2935,9 +2987,16 @@ function mouseWheel(e) {
   return false;
 }
 
-function mouseClicked() {
+function mouseClicked(event) {
   if (isHtmlLevelMenuActive()) return true;
-  if (!isPrimaryPointerButton()) return false;
+  if (!isPrimaryPointerButton(event)) {
+    cancelPointerInteractionState();
+    return false;
+  }
+  if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+    cancelPointerInteractionState();
+    return false;
+  }
   /*
     Checks if a button is clicked and reloads/selects level. This avoids
     accidental reset while drawing because release is handled separately.
@@ -2973,19 +3032,18 @@ function mouseClicked() {
   }
 }
 
-function mouseReleased() {
+function mouseReleased(event) {
   /*
     If gameMode is 1, convert drawn coordinates into a physical line.
     Otherwise handle button clicks to reset/load level.
   */
   if (isHtmlLevelMenuActive()) return true;
-  if (!isPrimaryPointerButton()) {
-    if (gameMode === 4) {
-      menuDragMode = "none";
-      menuScrollbarGrabOffsetX = 0;
-    }
-    menuButtonArmed = false;
-    resetButtonArmed = false;
+  if (!isPrimaryPointerButton(event)) {
+    cancelPointerInteractionState();
+    return false;
+  }
+  if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) {
+    cancelPointerInteractionState();
     return false;
   }
   if (gameMode === 4) {
