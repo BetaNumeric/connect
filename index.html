@@ -98,6 +98,7 @@
     }
 
     #level-menu-player {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 8px;
@@ -107,7 +108,7 @@
 
     .menu-player-btn,
     .menu-player-name {
-      border: 0;
+      border: 1px solid transparent;
       border-radius: 10px;
       background: var(--ui-white);
       color: var(--ui-black);
@@ -115,7 +116,8 @@
       cursor: pointer;
       outline: none;
       box-shadow: none;
-      transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+      box-sizing: border-box;
+      transition: border-color 120ms ease, border-width 120ms ease;
     }
 
     .menu-player-btn {
@@ -134,17 +136,23 @@
       font-weight: 500;
     }
 
+    .menu-player-btn[hidden] {
+      display: none !important;
+    }
+
     .menu-player-icon {
       display: block;
-      width: 24px;
-      height: 24px;
+      width: 30px;
+      height: 30px;
       pointer-events: none;
     }
 
     .menu-player-btn:hover,
-    .menu-player-name:hover {
-      background: var(--ui-black);
-      color: var(--ui-white);
+    .menu-player-name:hover,
+    .menu-player-btn:focus-visible,
+    .menu-player-name:focus-visible {
+      border-color: var(--ui-black);
+      border-width: 2px;
     }
 
     .menu-player-btn:disabled {
@@ -156,6 +164,8 @@
     .menu-player-btn:disabled:hover {
       background: #e6e6e6;
       color: #666666;
+      border-color: transparent;
+      border-width: 1px;
     }
 
     .menu-player-name {
@@ -170,6 +180,52 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .menu-settings-panel {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      width: min(280px, 92vw);
+      background: var(--ui-white);
+      border-radius: 10px;
+      padding: 8px;
+      box-sizing: border-box;
+      z-index: 2;
+      display: grid;
+      gap: 6px;
+    }
+
+    .menu-settings-panel[hidden] {
+      display: none;
+    }
+
+    .menu-settings-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ui-black);
+      padding: 2px 4px;
+      line-height: 1.2;
+    }
+
+    .menu-settings-action {
+      appearance: none;
+      -webkit-appearance: none;
+      border: 0;
+      border-radius: 8px;
+      background: var(--ui-gray-mid);
+      color: var(--ui-white);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.1;
+      text-align: left;
+      cursor: pointer;
+      padding: 10px 12px;
+      transition: background-color 120ms ease;
+    }
+
+    .menu-settings-action:hover {
+      background: var(--ui-black);
     }
 
     #level-menu-list {
@@ -218,7 +274,7 @@
       min-width: 72px;
       background: var(--ui-gray-mid);
       border: 0;
-      border-radius: 0;
+      border-radius: 10px;
       cursor: grab;
       outline: none;
       box-shadow: none;
@@ -232,7 +288,7 @@
     .level-menu-card {
       border: 1px solid var(--ui-black);
       background: var(--ui-white);
-      border-radius: 0;
+      border-radius: 10px;
       padding: 0;
       color: var(--ui-black);
       text-align: left;
@@ -361,6 +417,11 @@
         font-size: 30px;
       }
 
+      .menu-player-icon {
+        width: 27px;
+        height: 27px;
+      }
+
       .menu-player-name {
         font-size: 16px;
         padding: 0 10px;
@@ -441,20 +502,30 @@
         <div id="level-menu-player">
           <button id="menu-player-prev" class="menu-player-btn" type="button" aria-label="Previous player">
             <svg class="menu-player-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M14.5 5 L8.5 12 L14.5 19" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square" stroke-linejoin="miter"></path>
+              <path d="M14.5 5 L8.5 12 L14.5 19" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="square" stroke-linejoin="miter"></path>
             </svg>
           </button>
           <button id="menu-player-name" class="menu-player-name" type="button">Set Player Name</button>
           <button id="menu-player-next" class="menu-player-btn" type="button" aria-label="Next player">
             <svg class="menu-player-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M9.5 5 L15.5 12 L9.5 19" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square" stroke-linejoin="miter"></path>
+              <path d="M9.5 5 L15.5 12 L9.5 19" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="square" stroke-linejoin="miter"></path>
             </svg>
           </button>
           <button id="menu-player-delete" class="menu-player-btn" type="button" aria-label="Delete player">
             <svg class="menu-player-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M7 7 L17 17 M17 7 L7 17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square"></path>
+              <path d="M7 7 L17 17 M17 7 L7 17" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="square"></path>
             </svg>
           </button>
+          <button id="menu-player-settings" class="menu-player-btn" type="button" aria-label="Settings" aria-haspopup="menu" aria-expanded="false">
+            <svg id="menu-player-settings-icon" class="menu-player-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M19.416 12 L17.436 13.978 L17.681 16.767 L14.892 17.01 L13.288 19.303 L10.996 17.697 L8.292 18.422 L7.569 15.718 L5.031 14.536 L6.216 12 L5.031 9.464 L7.569 8.282 L8.292 5.578 L10.996 6.303 L13.288 4.697 L14.892 6.99 L17.681 7.233 L17.436 10.022 Z" fill="none" stroke="currentColor" stroke-width="1.483" stroke-linejoin="miter"></path>
+              <circle cx="12" cy="12" r="3.337" fill="none" stroke="currentColor" stroke-width="1.038"></circle>
+            </svg>
+          </button>
+          <div id="menu-settings-panel" class="menu-settings-panel" role="menu" aria-label="Settings" hidden>
+            <div class="menu-settings-title">Settings</div>
+            <button id="menu-settings-clear" class="menu-settings-action" type="button">Delete all game data</button>
+          </div>
         </div>
       </header>
       <div id="level-menu-list" role="list" aria-label="Levels"></div>

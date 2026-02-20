@@ -49,6 +49,10 @@ const ARC_SIDE_BOTTOM = "bottom";
 const ARC_SIDE_LEFT = "left";
 const ARC_SIDE_ORDER = [ARC_SIDE_TOP, ARC_SIDE_RIGHT, ARC_SIDE_BOTTOM, ARC_SIDE_LEFT];
 const DRAW_COLLISION_STEP_FACTOR = 0.35;
+const ROTOR_GEAR_TEETH = 9;
+const ROTOR_GEAR_OUTER_SCALE = 1.03;
+const ROTOR_GEAR_INNER_RATIO = 0.78;
+const ROTOR_GEAR_CORE_RATIO = 0.45;
 const DEFAULT_ROTOR_MOTOR_SPEED_DEG = 180;
 const DEFAULT_ROTOR_MOTOR_DIRECTION = 1;
 const DEFAULT_ROTOR_MOTOR_TORQUE = 1000000000;
@@ -74,6 +78,7 @@ let levelData = null;
 let levelImg = [];
 let levelDefaultImg = [];
 let levelsLoadingFromSources = false;
+let menuOpenPending = false;
 let timeStart = 0, time = 0, totalLines = 0;
 let minTime = 0, minLines = 0;
 let playerMinTime = null, playerMinLines = null;
@@ -83,6 +88,7 @@ let viewportScale = 1;
 let isTouchDevice = false;
 let touchInteractionInProgress = false;
 let multiTouchBlockActive = false;
+let activeTouchUiButton = null;
 let playerNameFieldRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerPrevButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerNextButtonRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -1584,26 +1590,85 @@ function drawRotorHubCircle(x, y, radius) {
   ellipse(x, y, radius * 2, radius * 2);
 }
 
+function getRotorGearMetrics(radius, minOuterRadius = 0) {
+  const baseRadius = Number(radius) || 0;
+  const outerR = Math.max(minOuterRadius, baseRadius * ROTOR_GEAR_OUTER_SCALE);
+  return {
+    outerR,
+    innerR: outerR * ROTOR_GEAR_INNER_RATIO,
+    coreR: outerR * ROTOR_GEAR_CORE_RATIO,
+    teeth: ROTOR_GEAR_TEETH,
+  };
+}
+
+function buildRotorGearVertices(outerR, innerR, teeth = ROTOR_GEAR_TEETH) {
+  const toothCount = Math.max(3, Math.round(teeth));
+  const points = [];
+  for (let i = 0; i < toothCount * 2; i++) {
+    const angle = (Math.PI * 2 * i) / (toothCount * 2);
+    const rr = i % 2 === 0 ? outerR : innerR;
+    points.push({ x: Math.cos(angle) * rr, y: Math.sin(angle) * rr });
+  }
+  return points;
+}
+
+function buildSvgClosedPath(points, offsetX = 0, offsetY = 0) {
+  if (!Array.isArray(points) || points.length < 1) return "";
+  const fmt = (value) => String(Math.round(value * 1000) / 1000);
+  const commands = [];
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const x = fmt((Number(p.x) || 0) + offsetX);
+    const y = fmt((Number(p.y) || 0) + offsetY);
+    commands.push(`${i === 0 ? "M" : "L"}${x} ${y}`);
+  }
+  commands.push("Z");
+  return commands.join(" ");
+}
+
+function renderMenuSettingsGearIcon(svgElement) {
+  if (!svgElement || typeof document === "undefined") return;
+  const NS = "http://www.w3.org/2000/svg";
+  const iconRadius = 7.2;
+  const center = 12;
+  const { outerR, innerR, coreR, teeth } = getRotorGearMetrics(iconRadius, 2.5);
+  const gearPath = buildSvgClosedPath(buildRotorGearVertices(outerR, innerR, teeth), center, center);
+  if (!gearPath) return;
+
+  while (svgElement.firstChild) svgElement.removeChild(svgElement.firstChild);
+
+  const rim = document.createElementNS(NS, "path");
+  rim.setAttribute("d", gearPath);
+  rim.setAttribute("fill", "none");
+  rim.setAttribute("stroke", "currentColor");
+  rim.setAttribute("stroke-width", String(Math.max(1.2, outerR * 0.2)));
+  rim.setAttribute("stroke-linejoin", "miter");
+  svgElement.appendChild(rim);
+
+  const core = document.createElementNS(NS, "circle");
+  core.setAttribute("cx", String(center));
+  core.setAttribute("cy", String(center));
+  core.setAttribute("r", String(Math.round(coreR * 1000) / 1000));
+  core.setAttribute("fill", "none");
+  core.setAttribute("stroke", "currentColor");
+  core.setAttribute("stroke-width", String(Math.max(1, outerR * 0.14)));
+  svgElement.appendChild(core);
+}
+
 function drawRotorHubGear(x, y, radius, spinDeg = 0) {
-  const outerR = max(4, radius * 1.03);
-  const innerR = outerR * 0.78;
-  const coreR = outerR * 0.45;
-  const teeth = 9;
+  const { outerR, innerR, coreR, teeth } = getRotorGearMetrics(radius, 4);
+  const points = buildRotorGearVertices(outerR, innerR, teeth);
 
   push();
   translate(x, y);
   rotate(radians(spinDeg));
   noFill();
   stroke(COLOR_GRAY_LIGHT);
-  strokeWeight(max(2, outerR * 0.22));
+  strokeWeight(Math.max(2, outerR * 0.22));
   beginShape();
-  for (let i = 0; i < teeth * 2; i++) {
-    const a = radians((360 / (teeth * 2)) * i);
-    const rr = i % 2 === 0 ? outerR : innerR;
-    vertex(cos(a) * rr, sin(a) * rr);
-  }
+  for (const point of points) vertex(point.x, point.y);
   endShape(CLOSE);
-  strokeWeight(max(1.5, outerR * 0.15));
+  strokeWeight(Math.max(1.5, outerR * 0.15));
   ellipse(0, 0, coreR * 2, coreR * 2);
   pop();
 }
@@ -1616,10 +1681,8 @@ function drawPreviewRotorHubCircle(g, x, y, radius) {
 }
 
 function drawPreviewRotorHubGear(g, x, y, radius, spinDeg = 0) {
-  const outerR = Math.max(2.5, radius * 1.03);
-  const innerR = outerR * 0.78;
-  const coreR = outerR * 0.45;
-  const teeth = 9;
+  const { outerR, innerR, coreR, teeth } = getRotorGearMetrics(radius, 2.5);
+  const points = buildRotorGearVertices(outerR, innerR, teeth);
 
   g.push();
   g.translate(x, y);
@@ -1628,11 +1691,7 @@ function drawPreviewRotorHubGear(g, x, y, radius, spinDeg = 0) {
   g.stroke(COLOR_GRAY_LIGHT);
   g.strokeWeight(Math.max(1.2, outerR * 0.2));
   g.beginShape();
-  for (let i = 0; i < teeth * 2; i++) {
-    const a = radians((360 / (teeth * 2)) * i);
-    const rr = i % 2 === 0 ? outerR : innerR;
-    g.vertex(cos(a) * rr, sin(a) * rr);
-  }
+  for (const point of points) g.vertex(point.x, point.y);
   g.endShape(CLOSE);
   g.strokeWeight(Math.max(1, outerR * 0.14));
   g.ellipse(0, 0, coreR * 2, coreR * 2);
@@ -1663,7 +1722,7 @@ function draw() {
   if (gameMode === 2) drawResultMode();
   if ((gameMode === 1 && physics) || (gameMode === 2 && levelUp)) drawResetButton();
   if (gameMode === 0 || gameMode === 1 || gameMode === 2) drawGlobalMenuButton();
-  if (gameMode === 4 && levelsLoadingFromSources) drawLevelMenuLoading();
+  if (gameMode === 4 && (levelsLoadingFromSources || menuOpenPending)) drawLevelMenuLoading(menuOpenPending ? "Opening menu..." : "Loading levels...");
   else if (gameMode === 4 && !htmlMenuDrawn) drawLevelMenu();
   if (gameMode === 5) {
     if (editorTestMode) {
@@ -1838,7 +1897,11 @@ function getHtmlMenuUi() {
   const prevButton = document.getElementById("menu-player-prev");
   const nextButton = document.getElementById("menu-player-next");
   const deleteButton = document.getElementById("menu-player-delete");
-  if (!overlay || !levelList || !scrollbarTrack || !scrollbarHandle || !playerNameButton || !prevButton || !nextButton || !deleteButton) return null;
+  const settingsButton = document.getElementById("menu-player-settings");
+  const settingsIcon = document.getElementById("menu-player-settings-icon");
+  const settingsPanel = document.getElementById("menu-settings-panel");
+  const clearDataButton = document.getElementById("menu-settings-clear");
+  if (!overlay || !levelList || !scrollbarTrack || !scrollbarHandle || !playerNameButton || !prevButton || !nextButton || !deleteButton || !settingsButton || !settingsPanel || !clearDataButton) return null;
 
   htmlMenuUi = {
     overlay,
@@ -1849,7 +1912,12 @@ function getHtmlMenuUi() {
     prevButton,
     nextButton,
     deleteButton,
+    settingsButton,
+    settingsIcon,
+    settingsPanel,
+    clearDataButton,
   };
+  if (settingsIcon) renderMenuSettingsGearIcon(settingsIcon);
 
   const dragState = {
     active: false,
@@ -1869,6 +1937,11 @@ function getHtmlMenuUi() {
 
   const CARD_TAP_DRAG_THRESHOLD_PX = 8;
   const clampNumber = (value, minValue, maxValue) => Math.max(minValue, Math.min(maxValue, value));
+  const setSettingsPanelOpen = (open) => {
+    const show = Boolean(open);
+    settingsPanel.hidden = !show;
+    settingsButton.setAttribute("aria-expanded", show ? "true" : "false");
+  };
   const getLevelCardAtClientPoint = (clientX, clientY) => {
     if (typeof document === "undefined") return null;
     if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
@@ -2009,11 +2082,13 @@ function getHtmlMenuUi() {
   htmlMenuUi.updateScrollbar = updateScrollbarFromLevelList;
   htmlMenuUi.updateLayout = updateMenuLayout;
   htmlMenuUi.scheduleLayoutSettle = scheduleMenuLayoutSettle;
+  htmlMenuUi.setSettingsPanelOpen = setSettingsPanelOpen;
+  setSettingsPanelOpen(false);
 
   const stopPropagation = (event) => {
     if (event && typeof event.stopPropagation === "function") event.stopPropagation();
   };
-  for (const el of [overlay, levelList, scrollbarTrack, playerNameButton, prevButton, nextButton, deleteButton]) {
+  for (const el of [overlay, levelList, scrollbarTrack, playerNameButton, prevButton, nextButton, deleteButton, settingsButton, settingsPanel, clearDataButton]) {
     el.addEventListener("pointerdown", stopPropagation);
     el.addEventListener("pointerup", stopPropagation);
     el.addEventListener("touchstart", stopPropagation, { passive: true });
@@ -2024,26 +2099,48 @@ function getHtmlMenuUi() {
   playerNameButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    setSettingsPanelOpen(false);
     promptForPlayerName();
     refreshHtmlLevelMenu();
   });
   prevButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    setSettingsPanelOpen(false);
     cyclePlayer(-1);
     refreshHtmlLevelMenu();
   });
   nextButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    setSettingsPanelOpen(false);
     cyclePlayer(1);
     refreshHtmlLevelMenu();
   });
   deleteButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    setSettingsPanelOpen(false);
     deleteCurrentPlayer();
     refreshHtmlLevelMenu();
+  });
+  settingsButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSettingsPanelOpen(settingsPanel.hidden);
+  });
+  clearDataButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!clearAllGameData()) return;
+    setSettingsPanelOpen(false);
+    refreshHtmlLevelMenu(false);
+  });
+  overlay.addEventListener("click", (event) => {
+    const target = event?.target;
+    if (!target || typeof target.closest !== "function") return;
+    if (target.closest("#menu-settings-panel") || target.closest("#menu-player-settings")) return;
+    setSettingsPanelOpen(false);
   });
 
   const endLevelListDrag = (event) => {
@@ -2144,6 +2241,7 @@ function getHtmlMenuUi() {
     if (!Number.isInteger(levelIndex)) return;
     event.preventDefault();
     event.stopPropagation();
+    setSettingsPanelOpen(false);
     openLevelFromHtmlMenu(levelIndex);
   });
 
@@ -2200,6 +2298,7 @@ function setHtmlLevelMenuVisible(visible) {
   htmlMenuVisible = Boolean(visible);
   ui.overlay.classList.toggle("is-visible", htmlMenuVisible);
   ui.overlay.setAttribute("aria-hidden", htmlMenuVisible ? "false" : "true");
+  if (!htmlMenuVisible && typeof ui.setSettingsPanelOpen === "function") ui.setSettingsPanelOpen(false);
   if (htmlMenuVisible) {
     if (typeof ui.scheduleLayoutSettle === "function") ui.scheduleLayoutSettle();
     else if (typeof ui.updateLayout === "function") {
@@ -2228,10 +2327,14 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
 
   const names = getPlayerNames();
   const hasPlayer = player !== null;
+  const hasMultiplePlayers = names.length > 1;
   ui.playerNameButton.textContent = hasPlayer ? player : "Set Player Name";
-  ui.prevButton.disabled = names.length <= 1;
-  ui.nextButton.disabled = names.length <= 1;
+  ui.prevButton.disabled = !hasMultiplePlayers;
+  ui.nextButton.disabled = !hasMultiplePlayers;
+  ui.prevButton.hidden = !hasMultiplePlayers;
+  ui.nextButton.hidden = !hasMultiplePlayers;
   ui.deleteButton.disabled = !hasPlayer;
+  ui.deleteButton.hidden = !hasPlayer;
 
   const scrollLeft = preserveScroll ? ui.levelList.scrollLeft : 0;
   const fragment = document.createDocumentFragment();
@@ -2321,7 +2424,7 @@ function syncHtmlLevelMenuVisibility() {
     return false;
   }
 
-  if (gameMode === 4 && levelsLoadingFromSources) {
+  if (gameMode === 4 && (levelsLoadingFromSources || menuOpenPending)) {
     if (htmlMenuVisible) setHtmlLevelMenuVisible(false);
     return false;
   }
@@ -2392,13 +2495,13 @@ function drawLevelMenu() {
   rect(scrollbar.handle.x + scrollbar.handle.w / 2, scrollbar.trackY, scrollbar.handle.w, scrollbar.handle.h);
 }
 
-function drawLevelMenuLoading() {
+function drawLevelMenuLoading(message = "Loading levels...") {
   background(COLOR_GRAY_LIGHT);
   noStroke();
   fill(COLOR_BLACK);
   textAlign(CENTER, CENTER);
   textSize(Math.max(18, height / 26));
-  text("Loading levels...", width / 2, height / 2);
+  text(message, width / 2, height / 2);
 }
 
 function drawMenuTopPlayerBar() {
@@ -2526,6 +2629,18 @@ function getPointerCanvasPosition(event) {
   return { x: px, y: py };
 }
 
+function isGameMenuButtonAvailable() {
+  return gameMode === 0 || gameMode === 1 || gameMode === 2;
+}
+
+function isGameResetButtonAvailable() {
+  return (gameMode === 1 && physics) || (gameMode === 2 && levelUp);
+}
+
+function getTouchButtonSlopPx() {
+  return Math.max(18, Math.round(Math.min(width, height) * 0.02));
+}
+
 function getLevelCardGap() {
   return MENU_LEVEL_CARD_GAP_PX;
 }
@@ -2587,21 +2702,37 @@ function drawGlobalMenuButton() {
   // For hover/hit detection use expanded rect on touch devices
   const hover = pointInRect(mouseX, mouseY, getMenuButtonRect(true));
   if (hover) cursor(HAND);
-  noStroke();
-  fill(COLOR_BLACK, hover ? ALPHA_OPAQUE : ALPHA_DIM);
-  rect(x + w / 2, y + h / 2, w, h, h * 0.25);
+  const borderW = hover ? 2 : 1;
   fill(COLOR_WHITE);
+  stroke(COLOR_BLACK, ALPHA_OPAQUE);
+  strokeWeight(borderW);
+  rect(x + w / 2, y + h / 2, w, h, 10);
+  noStroke();
+  fill(COLOR_BLACK);
   textAlign(CENTER, CENTER);
   textSize(h * 0.52);
   text("Menu", x + w / 2, y + h / 2);
 }
 
 function enterMenu() {
+  if (menuOpenPending) return;
   physics = false;
   linePos = [];
   linePosTest = [];
   gameMode = 4;
-  refreshHtmlLevelMenu(false);
+  menuOpenPending = true;
+  if (htmlMenuVisible) setHtmlLevelMenuVisible(false);
+  // Give one frame of visual feedback before building menu DOM.
+  setTimeout(() => {
+    requestAnimationFrame(() => {
+      try {
+        if (gameMode !== 4) return;
+        refreshHtmlLevelMenu(false);
+      } finally {
+        menuOpenPending = false;
+      }
+    });
+  }, 40);
 }
 
 function getPlayerNames() {
@@ -2705,6 +2836,32 @@ function loadScores() {
 }
 
 function saveScores() { localStorage.setItem(SCORE_KEY, JSON.stringify(scoreStore)); }
+function clearAllGameData() {
+  const confirmed = window.confirm("Delete all saved game data? This will clear players, records, and saved level previews.");
+  if (!confirmed) return false;
+
+  try {
+    const keysToDelete = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (key === SCORE_KEY || key === EDITOR_TEST_LEVEL_KEY || key.startsWith(PREVIEW_KEY)) keysToDelete.push(key);
+    }
+    for (const key of keysToDelete) localStorage.removeItem(key);
+  } catch (err) {
+    console.warn("Failed to clear saved game data:", err);
+  }
+
+  scoreStore = { rows: [], activeRowId: null };
+  player = null;
+  minTime = 0;
+  minLines = 0;
+  playerMinTime = null;
+  playerMinLines = null;
+  generateDefaultPreviews();
+  saveScores();
+  return true;
+}
 function createScoreRow(name) {
   // Add a new player session row.
   const scoreLen = Math.max(1, getLevelCount());
@@ -2927,6 +3084,7 @@ function cancelPointerInteractionState() {
   menuScrollbarGrabOffsetX = 0;
   menuButtonArmed = false;
   resetButtonArmed = false;
+  activeTouchUiButton = null;
 }
 
 function mousePressed(event) {
@@ -3124,9 +3282,19 @@ function mouseReleased(event) {
 function touchStarted(event) {
   if (isHtmlLevelMenuActive()) {
     touchInteractionInProgress = false;
+    activeTouchUiButton = null;
     return true;
   }
   if (shouldBlockTouchInteraction(event)) {
+    touchInteractionInProgress = false;
+    cancelPointerInteractionState();
+    return false;
+  }
+
+  const touchPos = getPointerCanvasPosition(event);
+  const touchButtonSlop = getTouchButtonSlopPx();
+  if (isGameMenuButtonAvailable() && pointInRectWithSlop(touchPos.x, touchPos.y, getMenuButtonRect(true), touchButtonSlop)) {
+    activeTouchUiButton = "menu";
     touchInteractionInProgress = false;
     menuButtonArmed = false;
     resetButtonArmed = false;
@@ -3134,6 +3302,17 @@ function touchStarted(event) {
     linePosTest = [];
     return false;
   }
+  if (isGameResetButtonAvailable() && pointInRectWithSlop(touchPos.x, touchPos.y, getResetButtonRect(true), touchButtonSlop)) {
+    activeTouchUiButton = "reset";
+    touchInteractionInProgress = false;
+    menuButtonArmed = false;
+    resetButtonArmed = false;
+    linePos = [];
+    linePosTest = [];
+    return false;
+  }
+
+  activeTouchUiButton = null;
   touchInteractionInProgress = isCanvasTouchEvent(event);
   if (!touchInteractionInProgress) return true;
   if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
@@ -3145,10 +3324,23 @@ function touchStarted(event) {
 
 function touchMoved(event) {
   if (isHtmlLevelMenuActive()) return true;
+  if (activeTouchUiButton) {
+    const touchPos = getPointerCanvasPosition(event);
+    const touchButtonSlop = getTouchButtonSlopPx();
+    if (activeTouchUiButton === "menu") {
+      if (!isGameMenuButtonAvailable() || !pointInRectWithSlop(touchPos.x, touchPos.y, getMenuButtonRect(true), touchButtonSlop)) {
+        activeTouchUiButton = null;
+      }
+    } else if (activeTouchUiButton === "reset") {
+      if (!isGameResetButtonAvailable() || !pointInRectWithSlop(touchPos.x, touchPos.y, getResetButtonRect(true), touchButtonSlop)) {
+        activeTouchUiButton = null;
+      }
+    }
+    return false;
+  }
   if (shouldBlockTouchInteraction(event)) {
     touchInteractionInProgress = false;
-    linePos = [];
-    linePosTest = [];
+    cancelPointerInteractionState();
     return false;
   }
   if (!touchInteractionInProgress) return true;
@@ -3163,14 +3355,35 @@ function touchMoved(event) {
 function touchEnded(event) {
   if (isHtmlLevelMenuActive()) {
     touchInteractionInProgress = false;
+    activeTouchUiButton = null;
     return true;
+  }
+  if (activeTouchUiButton) {
+    const touchPos = getPointerCanvasPosition(event);
+    const touchButtonSlop = getTouchButtonSlopPx();
+    const touchButton = activeTouchUiButton;
+    activeTouchUiButton = null;
+    if (
+      touchButton === "menu" &&
+      isGameMenuButtonAvailable() &&
+      pointInRectWithSlop(touchPos.x, touchPos.y, getMenuButtonRect(true), touchButtonSlop)
+    ) {
+      cancelPointerInteractionState();
+      enterMenu();
+    } else if (
+      touchButton === "reset" &&
+      isGameResetButtonAvailable() &&
+      pointInRectWithSlop(touchPos.x, touchPos.y, getResetButtonRect(true), touchButtonSlop)
+    ) {
+      cancelPointerInteractionState();
+      loadLevel(false);
+    }
+    touchInteractionInProgress = false;
+    return false;
   }
   if (shouldBlockTouchInteraction(event)) {
     touchInteractionInProgress = false;
-    menuButtonArmed = false;
-    resetButtonArmed = false;
-    linePos = [];
-    linePosTest = [];
+    cancelPointerInteractionState();
     return false;
   }
   if (!touchInteractionInProgress) {
