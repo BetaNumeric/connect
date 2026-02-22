@@ -13,7 +13,7 @@ The project is built using [p5.js](https://p5js.org/) for the visuals and [Planc
 3. Release to turn your drawing into a physical object.
 
 
-<img width="1600" height="1200" alt="game" src="https://github.com/user-attachments/assets/7210b3a6-5df1-433b-bfe6-f0449f61de82" />
+<img width="1600" height="900" alt="level" src="https://github.com/user-attachments/assets/69d90754-49a8-45f5-b81b-ab3d86520d51" />
 
 
 ## **Running Locally**
