@@ -12,6 +12,10 @@ The project is built using [p5.js](https://p5js.org/) for the visuals and [Planc
 2. Click and drag to draw lines.  
 3. Release to turn your drawing into a physical object.
 
+
+<img width="1600" height="1200" alt="game" src="https://github.com/user-attachments/assets/7210b3a6-5df1-433b-bfe6-f0449f61de82" />
+
+
 ## **Running Locally**
 
 Because the game loads level data via JSON, you need to run it through a local static server rather than just opening the file in a browser.
@@ -25,3 +29,7 @@ Then navigate to http://localhost:8000 to play or http://localhost:8000/editor.h
 ## **Level Editor**
 
 The project includes a built-in level editor (editor.html). It allows you to place shapes, create rigid groups, and configure rotors. You can export your creations as JSON files and add them to the game manifest to create new challenges.
+
+
+<img width="1920" height="1200" alt="editor" src="https://github.com/user-attachments/assets/373a7299-99ca-4239-a92a-4cc65b0602a0" />
+
