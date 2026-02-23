@@ -77,6 +77,8 @@ let levelDefs = [];
 let levelData = null;
 let levelImg = [];
 let levelDefaultImg = [];
+let levelImgDataUrl = [];
+let levelDefaultImgDataUrl = [];
 let levelsLoadingFromSources = false;
 let menuOpenPending = false;
 let timeStart = 0, time = 0, totalLines = 0;
@@ -1263,6 +1265,8 @@ function applyLoadedLevelData(rawData) {
   if (levelDefs.length < 1) levelDefs = [{ id: "level_0", objects: [] }];
   levelImg = new Array(levelDefs.length).fill(null);
   levelDefaultImg = new Array(levelDefs.length).fill(null);
+  levelImgDataUrl = new Array(levelDefs.length).fill("");
+  levelDefaultImgDataUrl = new Array(levelDefs.length).fill("");
   level = constrain(level, 0, getMaxLevelIndex());
 }
 
@@ -1382,8 +1386,11 @@ function generateDefaultPreviews() {
   // Draw default level previews directly from level geometry.
   for (let i = 0; i < levelImg.length; i++) {
     const preview = renderLevelPreview(levelDefs[i], i);
+    const previewData = levelPreviewToDataUrl(preview);
     levelDefaultImg[i] = preview;
     levelImg[i] = preview;
+    levelDefaultImgDataUrl[i] = previewData;
+    levelImgDataUrl[i] = previewData;
   }
 }
 
@@ -1725,13 +1732,19 @@ function draw() {
   if (gameMode === 4 && (levelsLoadingFromSources || menuOpenPending)) drawLevelMenuLoading(menuOpenPending ? "Opening menu..." : "Loading levels...");
   else if (gameMode === 4 && !htmlMenuDrawn) drawLevelMenu();
   if (gameMode === 5) {
+    let shouldLoadNextLevel = true;
     if (editorTestMode) {
       level = 0;
     } else {
       saveLevelPreview(level);
-      if (level < getMaxLevelIndex()) level++; else { level = 0; gameMode = 0; }
+      if (level < getMaxLevelIndex()) {
+        level++;
+      } else {
+        enterMenu();
+        shouldLoadNextLevel = false;
+      }
     }
-    loadLevel(false);
+    if (shouldLoadNextLevel) loadLevel(false);
   }
 }
 
@@ -2351,8 +2364,16 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
 
     const previewWrap = document.createElement("div");
     previewWrap.className = "level-menu-preview";
-    const previewData = levelPreviewToDataUrl(levelImg[i]);
-    const defaultPreviewData = levelPreviewToDataUrl(levelDefaultImg[i] || levelImg[i]);
+    let previewData = levelImgDataUrl[i] || "";
+    if (!previewData) {
+      previewData = levelPreviewToDataUrl(levelImg[i]);
+      if (previewData) levelImgDataUrl[i] = previewData;
+    }
+    let defaultPreviewData = levelDefaultImgDataUrl[i] || "";
+    if (!defaultPreviewData) {
+      defaultPreviewData = levelPreviewToDataUrl(levelDefaultImg[i] || levelImg[i]);
+      if (defaultPreviewData) levelDefaultImgDataUrl[i] = defaultPreviewData;
+    }
     const hasPreview = Boolean(previewData || defaultPreviewData);
     if (hasPreview) {
       const currentSrc = previewData || defaultPreviewData;
@@ -2722,17 +2743,10 @@ function enterMenu() {
   gameMode = 4;
   menuOpenPending = true;
   if (htmlMenuVisible) setHtmlLevelMenuVisible(false);
-  // Give one frame of visual feedback before building menu DOM.
-  setTimeout(() => {
-    requestAnimationFrame(() => {
-      try {
-        if (gameMode !== 4) return;
-        refreshHtmlLevelMenu(false);
-      } finally {
-        menuOpenPending = false;
-      }
-    });
-  }, 40);
+  // Keep transition feedback brief; menu content will render once via syncHtmlLevelMenuVisibility().
+  requestAnimationFrame(() => {
+    menuOpenPending = false;
+  });
 }
 
 function getPlayerNames() {
@@ -2912,6 +2926,7 @@ function loadStoredPreviews() {
   for (let i = 0; i <= getMaxLevelIndex(); i++) {
     const data = localStorage.getItem(previewKey(i));
     if (!data) continue;
+    levelImgDataUrl[i] = data;
     pendingLoads++;
     loadImage(data, (img) => {
       levelImg[i] = img;
@@ -2919,6 +2934,7 @@ function loadStoredPreviews() {
       pendingLoads--;
       finalize();
     }, () => {
+      levelImgDataUrl[i] = "";
       pendingLoads--;
       finalize();
     });
@@ -2931,6 +2947,7 @@ function saveLevelPreview(i) {
   try {
     const data = canvasRenderer.elt.toDataURL("image/png");
     localStorage.setItem(previewKey(i), data);
+    levelImgDataUrl[i] = data;
     loadImage(data, (img) => {
       levelImg[i] = img;
       if (gameMode === 4) refreshHtmlLevelMenu();
@@ -3495,7 +3512,13 @@ function checkEdge(px = mouseX, py = mouseY) {
 
 function loadLevel(advance = true) {
   // Deletes all level objects, resets variables, and (re)loads level content.
-  if (advance && gameMode !== 4 && levelUp && !editorTestMode) level++;
+  if (advance && gameMode !== 4 && levelUp && !editorTestMode) {
+    if (level >= getMaxLevelIndex()) {
+      enterMenu();
+      return;
+    }
+    level++;
+  }
   if (level > getMaxLevelIndex()) { if (player && !editorTestMode) createScoreRow(player); level = 0; }
 
   for (const o of circles) o.delete(); circles = [];
