@@ -35,12 +35,12 @@ const PARTICLE_DAMPING = 0.93;
 const PARTICLES_ON_CONNECT = 40;
 const PARTICLES_ON_FAIL = 70;
 
-const BOX_FIXTURE_DEF = { density: 0.2, friction: 0.3, restitution: 0.1 };
-const CIRCLE_FIXTURE_DEF = { density: 0.5, friction: 0.2, restitution: 0.1 };
-const DRAWN_LINE_FIXTURE_DEF = { density: 3, friction: 0.2, restitution: 0.01 };
-const CUSTOM_SHAPE_CIRCLE_FIXTURE_DEF = { density: 0.1, friction: 0.2, restitution: 0 };
-const ARC_BOX_FIXTURE_DEF = { density: 0.2, friction: 0.3, restitution: 0.1 };
-const RIGID_GROUP_FIXTURE_DEF = { density: 0.2, friction: 0.3, restitution: 0.1 };
+const BOX_FIXTURE_DEF = { density: 5.0, friction: 0.3, restitution: 0.1 };
+const CIRCLE_FIXTURE_DEF = { density: 1.0, friction: 0.2, restitution: 0.1 };
+const DRAWN_LINE_FIXTURE_DEF = { density: 5.0, friction: 0.1, restitution: 0.01 };
+const CUSTOM_SHAPE_CIRCLE_FIXTURE_DEF = { density: 5.0, friction: 0.2, restitution: 0 };
+const ARC_BOX_FIXTURE_DEF = { density: 5.0, friction: 0.3, restitution: 0.1 };
+const RIGID_GROUP_FIXTURE_DEF = { density: 5.0, friction: 0.3, restitution: 0.1 };
 const ARC_BOX_SEGMENTS = 28;
 const ARC_BOX_MAX_CUT = 0.95;
 const ARC_SIDE_TOP = "top";
@@ -101,6 +101,7 @@ let playerNameFieldRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerPrevButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerNextButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let playerDeleteButtonRect = { x: 0, y: 0, w: 0, h: 0 };
+let playerCircleContactThisStep = false;
 let menuButtonRect = { x: 0, y: 0, w: 0, h: 0 };
 let menuButtonArmed = false;
 let resetButtonArmed = false;
@@ -121,9 +122,17 @@ class B2D {
     this.world = null;
     this.stepAccumulator = 0;
   }
-  createWorld() { this.world = planck.World(planck.Vec2(0, -20)); }
+  createWorld() {
+    this.world = planck.World(planck.Vec2(0, -20));
+    if (this.world && typeof this.world.on === "function") {
+      this.world.on("begin-contact", (contact) => {
+        if (isPlayerCircleContact(contact)) playerCircleContactThisStep = true;
+      });
+    }
+  }
   step(frameDtSec = PHYSICS_TIME_STEP_SEC) {
     if (!this.world) return;
+    playerCircleContactThisStep = false;
     const rawDt = Number(frameDtSec);
     const clampedDt = Number.isFinite(rawDt)
       ? Math.max(0, Math.min(PHYSICS_MAX_FRAME_DT_SEC, rawDt))
@@ -153,6 +162,17 @@ class B2D {
 function setBodyContinuousCollision(body, enabled = true) {
   if (!body) return;
   if (enabled && typeof body.setBullet === "function") body.setBullet(true);
+}
+
+function isPlayerCircleContact(contact) {
+  if (!contact || circles.length < 2) return false;
+  const bodyA = contact.getFixtureA()?.getBody?.();
+  const bodyB = contact.getFixtureB()?.getBody?.();
+  if (!bodyA || !bodyB) return false;
+  const c0 = circles[0]?.body;
+  const c1 = circles[1]?.body;
+  if (!c0 || !c1) return false;
+  return (bodyA === c0 && bodyB === c1) || (bodyA === c1 && bodyB === c0);
 }
 
 class Box {
@@ -3029,7 +3049,8 @@ function testConnection() {
   const a = box2d.getBodyPos(circles[0].body);
   const b = box2d.getBodyPos(circles[1].body);
   circles[0].pos = a.copy(); circles[1].pos = b.copy();
-  if (p5.Vector.sub(b, a).mag() <= circleR * 2) {
+  const touchedThisFrame = playerCircleContactThisStep;
+  if (p5.Vector.sub(b, a).mag() <= circleR * 2 || touchedThisFrame) {
     if (editorTestMode) {
       // Editor test runs should not update persistent records or previews.
       runSetGlobalLineRecord = true;
@@ -3043,6 +3064,7 @@ function testConnection() {
       saveLevelPreview(level);
     }
     circles[0].change(); circles[1].change();
+    playerCircleContactThisStep = false;
     physics = false;
     const x = a.x - (a.x - b.x) / 2;
     const y = a.y - (a.y - b.y) / 2;
