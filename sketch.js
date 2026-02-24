@@ -49,6 +49,12 @@ const ARC_SIDE_BOTTOM = "bottom";
 const ARC_SIDE_LEFT = "left";
 const ARC_SIDE_ORDER = [ARC_SIDE_TOP, ARC_SIDE_RIGHT, ARC_SIDE_BOTTOM, ARC_SIDE_LEFT];
 const DRAW_COLLISION_STEP_FACTOR = 0.35;
+const DRAW_COLLISION_CLEARANCE_PX = 1;
+const PHYSICS_TIME_STEP_SEC = 1 / 60;
+const PHYSICS_MAX_FRAME_DT_SEC = 1 / 15;
+const PHYSICS_MAX_SUB_STEPS = 4;
+const PHYSICS_VELOCITY_ITERATIONS = 12;
+const PHYSICS_POSITION_ITERATIONS = 8;
 const ROTOR_GEAR_TEETH = 9;
 const ROTOR_GEAR_OUTER_SCALE = 1.03;
 const ROTOR_GEAR_INNER_RATIO = 0.78;
@@ -113,9 +119,26 @@ class B2D {
   constructor() {
     this.scale = 10;
     this.world = null;
+    this.stepAccumulator = 0;
   }
   createWorld() { this.world = planck.World(planck.Vec2(0, -20)); }
-  step() { if (this.world) this.world.step(1 / 60, 8, 3); }
+  step(frameDtSec = PHYSICS_TIME_STEP_SEC) {
+    if (!this.world) return;
+    const rawDt = Number(frameDtSec);
+    const clampedDt = Number.isFinite(rawDt)
+      ? Math.max(0, Math.min(PHYSICS_MAX_FRAME_DT_SEC, rawDt))
+      : PHYSICS_TIME_STEP_SEC;
+    this.stepAccumulator += clampedDt;
+    let subSteps = 0;
+    while (this.stepAccumulator >= PHYSICS_TIME_STEP_SEC && subSteps < PHYSICS_MAX_SUB_STEPS) {
+      this.world.step(PHYSICS_TIME_STEP_SEC, PHYSICS_VELOCITY_ITERATIONS, PHYSICS_POSITION_ITERATIONS);
+      this.stepAccumulator -= PHYSICS_TIME_STEP_SEC;
+      subSteps++;
+    }
+    if (this.stepAccumulator > PHYSICS_TIME_STEP_SEC * PHYSICS_MAX_SUB_STEPS) {
+      this.stepAccumulator = PHYSICS_TIME_STEP_SEC;
+    }
+  }
   pxToW(v) { return v / this.scale; }
   wToPx(v) { return v * this.scale; }
   p2w(x, y) {
@@ -127,6 +150,11 @@ class B2D {
   destroy(body) { if (body && this.world) this.world.destroyBody(body); }
 }
 
+function setBodyContinuousCollision(body, enabled = true) {
+  if (!body) return;
+  if (enabled && typeof body.setBullet === "function") body.setBullet(true);
+}
+
 class Box {
   constructor(x, y, w, h, st, a = 0) {
     // Coordinates, size, and static/dynamic mode for a box body.
@@ -134,6 +162,7 @@ class Box {
     this.a = Number(a) || 0;
     this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
     this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
+    if (!st) setBodyContinuousCollision(this.body, true);
     this.body.createFixture(planck.Box(box2d.pxToW(w / 2), box2d.pxToW(h / 2)), { ...BOX_FIXTURE_DEF });
     this.body.setUserData(this);
   }
@@ -447,6 +476,7 @@ class ArcBox {
     this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
     this.localPoints = buildArcBoxLocalPoints(w, h, this.cut, this.sides);
     this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
+    if (!st) setBodyContinuousCollision(this.body, true);
     const triangles = triangulateSimplePolygon(this.localPoints);
     if (triangles.length > 0) {
       for (const tri of triangles) {
@@ -597,6 +627,7 @@ class RigidGroup {
     if (this.boundR <= 0) this.boundR = 20;
 
     this.body = box2d.world.createBody({ type: this.st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
+    if (!this.st) setBodyContinuousCollision(this.body, true);
 
     for (const part of this.parts) {
       if (part.type === "box") {
@@ -680,6 +711,7 @@ class Circle {
     // Coordinates, radius, and color for a dynamic circle body.
     this.x = x; this.y = y; this.r = r; this.c = c; this.pos = createVector(x, y);
     this.body = box2d.world.createBody({ type: "dynamic", position: box2d.p2w(x, y) });
+    setBodyContinuousCollision(this.body, true);
     this.body.createFixture(planck.Circle(box2d.pxToW(r)), { ...CIRCLE_FIXTURE_DEF });
     this.body.setUserData(this);
   }
@@ -718,6 +750,7 @@ class LineBody {
     this.angle = [0];
 
     this.body = box2d.world.createBody({ type: "dynamic", position: box2d.p2w(this.lineDot[0].x, this.lineDot[0].y) });
+    setBodyContinuousCollision(this.body, true);
     // Creates one circle shape at the first coordinate.
     this.body.createFixture(planck.Circle(box2d.pxToW(this.h / 2)), { ...DRAWN_LINE_FIXTURE_DEF });
 
@@ -803,6 +836,7 @@ class CustomShape {
     this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
     this.a = Number(a) || 0;
     this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
+    if (!st) setBodyContinuousCollision(this.body, true);
     if (this.e <= 8) {
       const verts = [];
       for (let i = 0; i < this.e; i++) {
@@ -1720,7 +1754,7 @@ function draw() {
   // Prohibits drawing lines outside of the screen.
   if (mouseX < d / 2 || mouseX > width - d / 2 || mouseY < d / 2 || mouseY > height - d / 2) drawPermit = false;
   if (gameMode !== 4) {
-    if (physics) box2d.step();
+    if (physics) box2d.step(deltaTime / 1000);
     drawObjects();
   }
 
@@ -3445,10 +3479,11 @@ function pointBlockedBySolids(x, y, dia = 0) {
 }
 
 function brushBlockedAt(x, y, dia) {
+  const inflatedDia = Math.max(0, Number(dia) || 0) + DRAW_COLLISION_CLEARANCE_PX * 2;
   // First do an inflated center check for round objects, then sample brush edge points.
-  if (pointBlockedBySolids(x, y, dia)) return true;
+  if (pointBlockedBySolids(x, y, inflatedDia)) return true;
 
-  const r = (Number(dia) || 0) / 2;
+  const r = inflatedDia / 2;
   if (r <= 0) return false;
   const dxy = r * 0.7071;
   const offsets = [
@@ -3485,7 +3520,8 @@ function checkEdge(px = mouseX, py = mouseY) {
     or through another object.
   */
   drawPermit = true;
-  if (px < d / 2 || px > width - d / 2 || py < d / 2 || py > height - d / 2) {
+  const drawBoundaryRadius = d / 2 + DRAW_COLLISION_CLEARANCE_PX;
+  if (px < drawBoundaryRadius || px > width - drawBoundaryRadius || py < drawBoundaryRadius || py > height - drawBoundaryRadius) {
     drawPermit = false;
     return;
   }
