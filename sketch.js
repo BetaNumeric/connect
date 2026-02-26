@@ -5,7 +5,11 @@ const LEVEL_INDEX_PATH = "data/levels/index.json";
 const LEVEL_DATA_PATH = "data/levels/levels.json";
 const LEVEL_FILES_DIR = "data/levels";
 const EDITOR_TEST_LEVEL_KEY = "connect_editor_test_level_v1";
+const EDITOR_LOAD_LEVEL_KEY = "connect_editor_load_level_v1";
 const EDITOR_TEST_QUERY_PARAM = "editor_test";
+const CUSTOM_LEVELS_KEY = "connect_custom_levels_v1";
+const CUSTOM_LEVEL_META_KEY = "connect_custom_level_meta_v1";
+const LEVEL_MENU_FILTER_KEY = "connect_level_menu_filter_v1";
 const MAX_PLAYER_NAME_LENGTH = 10;
 const SCORE_KEY = "connect_scores_v1";
 const PREVIEW_KEY = "connect_level_preview_";
@@ -114,6 +118,7 @@ let scoreStore = { rows: [], activeRowId: null };
 let editorTestMode = false;
 let htmlMenuUi = null;
 let htmlMenuVisible = false;
+let levelMenuFilter = "default";
 
 class B2D {
   // Adapter to mimic Processing's Box2D helper API in p5.js.
@@ -1108,6 +1113,7 @@ function preload() {
 
 function setup() {
   // Initial canvas, physics world, persistence, and UI setup.
+  levelMenuFilter = loadLevelMenuFilter();
   pixelDensity(1);
   canvasRenderer = createCanvas(BASE_WIDTH, BASE_HEIGHT);
   if (canvasRenderer && canvasRenderer.elt) {
@@ -1146,6 +1152,7 @@ function setup() {
   if (!levelsLoadingFromSources) generateDefaultPreviews();
 
   loadScores();
+  reconcileUpdatedCustomLevelProgress();
   if (!levelsLoadingFromSources) loadStoredPreviews();
   circleR = width / 50;
   d = width / 100;
@@ -1176,6 +1183,7 @@ function setup() {
           levelData = CONNECT_LEVEL_DATA;
         }
         applyLoadedLevelData(levelData);
+        reconcileUpdatedCustomLevelProgress();
         generateDefaultPreviews();
         loadStoredPreviews();
         scoreStore.rows = scoreStore.rows.map(normalizeRow);
@@ -1189,6 +1197,7 @@ function setup() {
         if (typeof CONNECT_LEVEL_DATA === "object" && CONNECT_LEVEL_DATA) {
           levelData = CONNECT_LEVEL_DATA;
           applyLoadedLevelData(levelData);
+          reconcileUpdatedCustomLevelProgress();
           generateDefaultPreviews();
           loadStoredPreviews();
           scoreStore.rows = scoreStore.rows.map(normalizeRow);
@@ -1314,8 +1323,459 @@ async function reloadLevelDataFromSources() {
 function getLevelCount() { return levelDefs.length; }
 function getMaxLevelIndex() { return Math.max(0, getLevelCount() - 1); }
 
+function normalizeLevelMenuFilter(value) {
+  const v = String(value || "").toLowerCase();
+  if (v === "custom") return "custom";
+  return "default";
+}
+
+function loadLevelMenuFilter() {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return "default";
+    return normalizeLevelMenuFilter(window.localStorage.getItem(LEVEL_MENU_FILTER_KEY));
+  } catch {
+    return "default";
+  }
+}
+
+function saveLevelMenuFilter(value) {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(LEVEL_MENU_FILTER_KEY, normalizeLevelMenuFilter(value));
+  } catch {}
+}
+
+function isCustomLevelDefinition(def) {
+  return String(def?.id || "").startsWith("custom:");
+}
+
+function getFilteredLevelIndices() {
+  const out = [];
+  const mode = normalizeLevelMenuFilter(levelMenuFilter);
+  for (let i = 0; i < levelDefs.length; i++) {
+    const custom = isCustomLevelDefinition(levelDefs[i]);
+    if (mode === "custom" && !custom) continue;
+    if (mode === "default" && custom) continue;
+    out.push(i);
+  }
+  return out;
+}
+
+function levelMenuFilterLabel(mode = levelMenuFilter) {
+  const normalized = normalizeLevelMenuFilter(mode);
+  if (normalized === "custom") return "Custom";
+  return "Default";
+}
+
+function cycleLevelMenuFilter() {
+  const mode = normalizeLevelMenuFilter(levelMenuFilter);
+  levelMenuFilter = mode === "default" ? "custom" : "default";
+  saveLevelMenuFilter(levelMenuFilter);
+}
+
+function customStorageIdToLevelDefId(idRaw, fallbackIndex = 0) {
+  const clean = String(idRaw ?? `custom_${fallbackIndex}`).trim();
+  return `custom:${clean.length > 0 ? clean : `custom_${fallbackIndex}`}`;
+}
+
+function levelDefIdToCustomStorageId(levelDefId) {
+  const raw = String(levelDefId || "");
+  if (!raw.startsWith("custom:")) return null;
+  const out = raw.slice("custom:".length).trim();
+  return out.length > 0 ? out : null;
+}
+
+function findStoredCustomLevelByLevelDefId(levelDefId) {
+  const storageId = levelDefIdToCustomStorageId(levelDefId);
+  if (!storageId) return null;
+  const payload = loadStoredCustomLevelsPayload();
+  const levels = Array.isArray(payload?.levels) ? payload.levels : [];
+  const index = levels.findIndex((entry) => String(entry?.id ?? "").trim() === storageId);
+  if (index < 0) return null;
+  return { payload, levels, index, entry: levels[index], storageId };
+}
+
+function resolveEditorLevelForCustomEntry(entry, storageId, fallbackLevelNumber = null) {
+  if (Number.isInteger(entry?.editorLevel)) return entry.editorLevel;
+  const idText = String(storageId || "").trim();
+  const match = idText.match(/^editor_(\d+)$/i);
+  if (match) {
+    const parsed = Number(match[1]);
+    if (Number.isInteger(parsed)) return parsed;
+  }
+  return Number.isInteger(fallbackLevelNumber) ? fallbackLevelNumber : null;
+}
+
+function openEditorPage(preferNewTab = false) {
+  if (preferNewTab) {
+    const popup = window.open("editor.html", "_blank", "noopener");
+    if (!popup) window.location.href = "editor.html";
+    return;
+  }
+  window.location.href = "editor.html";
+}
+
+function openCustomLevelInEditor(levelDefId, options = {}) {
+  const preferNewTab = Boolean(options.preferNewTab);
+  const fallbackLevelNumber = Number.isInteger(options.fallbackLevelNumber) ? options.fallbackLevelNumber : null;
+  const found = findStoredCustomLevelByLevelDefId(levelDefId);
+  if (!found) return false;
+
+  const entry = found.entry;
+  const editorLevel = resolveEditorLevelForCustomEntry(entry, found.storageId, fallbackLevelNumber);
+  const payload = {
+    id: found.storageId,
+    editorLevel,
+    name: typeof entry?.name === "string" ? entry.name : "",
+    objects: Array.isArray(entry?.objects) ? entry.objects : []
+  };
+
+  try {
+    localStorage.setItem(EDITOR_LOAD_LEVEL_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.warn("Failed to pass custom level to editor:", err);
+    return false;
+  }
+
+  openEditorPage(preferNewTab);
+  return true;
+}
+
+function reindexCustomLevelsSequentially(levels) {
+  const source = Array.isArray(levels) ? levels : [];
+  const out = [];
+  for (let i = 0; i < source.length; i++) {
+    const normalized = normalizeCustomLevelStorageEntry(source[i], i);
+    if (!normalized) continue;
+    const nextIndex = out.length;
+    out.push({
+      ...normalized,
+      id: `editor_${nextIndex}`,
+      editorLevel: nextIndex,
+      name: `Editor ${nextIndex}`,
+    });
+  }
+  return out;
+}
+
+function deleteCustomLevelByLevelDefId(levelDefId) {
+  const found = findStoredCustomLevelByLevelDefId(levelDefId);
+  if (!found) return false;
+  if (!window.confirm("Delete this custom level?")) return false;
+
+  const survivors = found.levels.filter((_entry, idx) => idx !== found.index);
+  const nextLevels = reindexCustomLevelsSequentially(survivors);
+  try {
+    persistCustomLevelsPayload({ version: 1, levels: nextLevels });
+  } catch {
+    return false;
+  }
+
+  applyLoadedLevelData(levelData);
+  reconcileUpdatedCustomLevelProgress();
+  generateDefaultPreviews();
+  loadStoredPreviews();
+  refreshHtmlLevelMenu(false);
+  return true;
+}
+
+function loadCustomLevelMeta() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_LEVEL_META_KEY);
+    if (!raw) return { stamps: {} };
+    const parsed = JSON.parse(raw);
+    const stamps = parsed && typeof parsed.stamps === "object" && parsed.stamps ? parsed.stamps : {};
+    return { stamps };
+  } catch {
+    return { stamps: {} };
+  }
+}
+
+function saveCustomLevelMeta(stamps) {
+  const safe = stamps && typeof stamps === "object" ? stamps : {};
+  try {
+    localStorage.setItem(CUSTOM_LEVEL_META_KEY, JSON.stringify({ stamps: safe }));
+  } catch (err) {
+    console.warn("Failed to save custom level meta:", err);
+  }
+}
+
+function clearLevelProgressAtIndex(levelIndex) {
+  if (!Number.isInteger(levelIndex) || levelIndex < 0) return false;
+  let changed = false;
+
+  try {
+    localStorage.removeItem(previewKey(levelIndex));
+  } catch (err) {
+    console.warn("Failed to remove preview cache for level:", levelIndex, err);
+  }
+
+  if (levelImgDataUrl[levelIndex]) {
+    levelImgDataUrl[levelIndex] = "";
+    changed = true;
+  }
+
+  if (levelDefaultImg[levelIndex]) {
+    levelImg[levelIndex] = levelDefaultImg[levelIndex];
+    levelImgDataUrl[levelIndex] = levelDefaultImgDataUrl[levelIndex] || "";
+    changed = true;
+  }
+
+  for (const row of scoreStore.rows) {
+    if (!Array.isArray(row?.timeScores) || !Array.isArray(row?.lineScores)) continue;
+    const prevTime = Number(row.timeScores[levelIndex]) || 0;
+    const prevLines = Number(row.lineScores[levelIndex]) || 0;
+    if (prevTime !== 0 || prevLines !== 0) {
+      row.timeScores[levelIndex] = 0;
+      row.lineScores[levelIndex] = 0;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function reconcileUpdatedCustomLevelProgress() {
+  const payload = loadStoredCustomLevelsPayload();
+  const levels = Array.isArray(payload?.levels) ? payload.levels : [];
+  const prevMeta = loadCustomLevelMeta();
+  const prevStamps = prevMeta.stamps && typeof prevMeta.stamps === "object" ? prevMeta.stamps : {};
+  const nextStamps = {};
+  const updatedDefIds = new Set();
+
+  for (let i = 0; i < levels.length; i++) {
+    const entry = levels[i];
+    const storageId = String(entry?.id ?? `custom_${i}`).trim() || `custom_${i}`;
+    const stamp = Number(entry?.savedAt) || 0;
+    nextStamps[storageId] = stamp;
+    if (Object.prototype.hasOwnProperty.call(prevStamps, storageId) && Number(prevStamps[storageId]) !== stamp) {
+      updatedDefIds.add(customStorageIdToLevelDefId(storageId, i));
+    }
+  }
+
+  if (updatedDefIds.size < 1) {
+    saveCustomLevelMeta(nextStamps);
+    return;
+  }
+
+  let changed = false;
+  for (let i = 0; i < levelDefs.length; i++) {
+    if (!updatedDefIds.has(levelDefs[i]?.id)) continue;
+    changed = clearLevelProgressAtIndex(i) || changed;
+  }
+
+  if (changed) saveScores();
+  saveCustomLevelMeta(nextStamps);
+}
+
+function normalizeCustomLevelStorageEntry(rawEntry, fallbackIndex = 0) {
+  if (!rawEntry || typeof rawEntry !== "object") return null;
+  const objects = Array.isArray(rawEntry.objects) ? rawEntry.objects : null;
+  if (!objects) return null;
+
+  const idRaw = String(rawEntry.id ?? `custom_${fallbackIndex}`).trim();
+  const id = idRaw.length > 0 ? idRaw : `custom_${fallbackIndex}`;
+  const editorLevelRaw = Number(rawEntry.editorLevel);
+  const editorLevel = Number.isInteger(editorLevelRaw) ? editorLevelRaw : null;
+  const savedAtRaw = Number(rawEntry.savedAt);
+
+  return {
+    id,
+    editorLevel,
+    name: typeof rawEntry.name === "string" ? rawEntry.name : "",
+    savedAt: Number.isFinite(savedAtRaw) ? savedAtRaw : 0,
+    objects,
+  };
+}
+
+function loadStoredCustomLevelsPayload() {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return { version: 1, levels: [] };
+    const raw = window.localStorage.getItem(CUSTOM_LEVELS_KEY);
+    if (!raw) return { version: 1, levels: [] };
+    const parsed = JSON.parse(raw);
+    const sourceLevels = Array.isArray(parsed?.levels) ? parsed.levels : [];
+    const levels = [];
+    for (let i = 0; i < sourceLevels.length; i++) {
+      const normalized = normalizeCustomLevelStorageEntry(sourceLevels[i], i);
+      if (normalized) levels.push(normalized);
+    }
+    return { version: Number(parsed?.version) || 1, levels };
+  } catch (err) {
+    console.warn("Failed to parse custom levels payload:", err);
+    return { version: 1, levels: [] };
+  }
+}
+
+function persistCustomLevelsPayload(payload) {
+  const sourceLevels = Array.isArray(payload?.levels) ? payload.levels : [];
+  const levels = [];
+  for (let i = 0; i < sourceLevels.length; i++) {
+    const normalized = normalizeCustomLevelStorageEntry(sourceLevels[i], i);
+    if (normalized) levels.push(normalized);
+  }
+  const out = { version: 1, levels };
+  try {
+    localStorage.setItem(CUSTOM_LEVELS_KEY, JSON.stringify(out));
+  } catch (err) {
+    console.warn("Failed to save custom levels:", err);
+    throw err;
+  }
+  return out;
+}
+
+function parseCustomLevelsImportPayload(parsed) {
+  let sourceLevels = [];
+  if (Array.isArray(parsed)) sourceLevels = parsed;
+  else if (Array.isArray(parsed?.levels)) sourceLevels = parsed.levels;
+  else if (Array.isArray(parsed?.customLevels)) sourceLevels = parsed.customLevels;
+  else if (Array.isArray(parsed?.objects)) {
+    const rawId = parsed?.id;
+    const numericId = Number(rawId);
+    const editorLevel = Number.isInteger(numericId) ? numericId : null;
+    const id = editorLevel !== null
+      ? `editor_${editorLevel}`
+      : (typeof rawId === "string" && rawId.trim().length > 0 ? rawId.trim() : "imported_level");
+    sourceLevels = [{
+      id,
+      editorLevel,
+      name: editorLevel !== null ? `Editor ${editorLevel}` : "Imported Level",
+      savedAt: Date.now(),
+      objects: parsed.objects,
+    }];
+  } else {
+    throw new Error("Missing custom levels array or single level objects payload");
+  }
+
+  const out = [];
+  for (let i = 0; i < sourceLevels.length; i++) {
+    const normalized = normalizeCustomLevelStorageEntry(sourceLevels[i], i);
+    if (normalized) out.push(normalized);
+  }
+  return out;
+}
+
+function mergeCustomLevels(existingLevels, incomingLevels) {
+  const existing = Array.isArray(existingLevels) ? existingLevels : [];
+  const incoming = Array.isArray(incomingLevels) ? incomingLevels : [];
+  const merged = existing.slice();
+  const keyToIndex = new Map();
+
+  const keyFor = (entry) => {
+    if (Number.isInteger(entry?.editorLevel)) return `editor:${entry.editorLevel}`;
+    return `id:${String(entry?.id ?? "")}`;
+  };
+
+  for (let i = 0; i < merged.length; i++) {
+    keyToIndex.set(keyFor(merged[i]), i);
+  }
+
+  let added = 0;
+  let updated = 0;
+  for (const entry of incoming) {
+    const key = keyFor(entry);
+    const existingIndex = keyToIndex.get(key);
+    if (existingIndex == null) {
+      keyToIndex.set(key, merged.length);
+      merged.push(entry);
+      added++;
+    } else {
+      merged[existingIndex] = entry;
+      updated++;
+    }
+  }
+
+  return { levels: merged, added, updated };
+}
+
+function loadCustomLevelsFromStorage() {
+  try {
+    const parsed = loadStoredCustomLevelsPayload();
+    const entries = Array.isArray(parsed?.levels) ? parsed.levels : [];
+    const levels = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (!entry || typeof entry !== "object") continue;
+      const objects = Array.isArray(entry.objects) ? entry.objects : [];
+      const id = customStorageIdToLevelDefId(entry.id, i);
+      levels.push({ id, objects });
+    }
+    return levels;
+  } catch (err) {
+    console.warn("Failed to load custom levels from storage:", err);
+    return [];
+  }
+}
+
+function clearStoredCustomLevels() {
+  if (!window.confirm("Delete all custom levels saved from the editor?")) return false;
+  try {
+    localStorage.removeItem(CUSTOM_LEVELS_KEY);
+    localStorage.removeItem(CUSTOM_LEVEL_META_KEY);
+  } catch (err) {
+    console.warn("Failed to clear custom levels:", err);
+  }
+  applyLoadedLevelData(levelData);
+  generateDefaultPreviews();
+  loadStoredPreviews();
+  refreshHtmlLevelMenu(false);
+  return true;
+}
+
+function importCustomLevelsFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result || "{}"));
+      const incoming = parseCustomLevelsImportPayload(parsed);
+      if (incoming.length < 1) throw new Error("No valid custom levels found");
+
+      const existingPayload = loadStoredCustomLevelsPayload();
+      const mergeResult = mergeCustomLevels(existingPayload.levels, incoming);
+      const saved = persistCustomLevelsPayload({ version: 1, levels: mergeResult.levels });
+
+      applyLoadedLevelData(levelData);
+      reconcileUpdatedCustomLevelProgress();
+      generateDefaultPreviews();
+      loadStoredPreviews();
+      refreshHtmlLevelMenu(false);
+      window.alert(`Imported ${incoming.length} custom level(s). Added ${mergeResult.added}, updated ${mergeResult.updated}. Total custom levels: ${saved.levels.length}.`);
+    } catch (err) {
+      window.alert(`Custom level import failed: ${err.message}`);
+    }
+  };
+  reader.onerror = () => {
+    window.alert("Could not read the selected file.");
+  };
+  reader.readAsText(file);
+}
+
+function exportCustomLevelsToFile() {
+  const payload = loadStoredCustomLevelsPayload();
+  const levels = Array.isArray(payload.levels) ? payload.levels : [];
+  if (levels.length < 1) {
+    window.alert("No custom levels to export.");
+    return false;
+  }
+
+  const text = JSON.stringify({ version: 1, levels }, null, 2);
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "connect_custom_levels.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return true;
+}
+
 function applyLoadedLevelData(rawData) {
-  levelDefs = normalizeLevelDefinitions(rawData);
+  const builtIn = normalizeLevelDefinitions(rawData);
+  const custom = normalizeLevelDefinitions({ levels: loadCustomLevelsFromStorage() });
+  levelDefs = [...builtIn, ...custom];
   if (levelDefs.length < 1) levelDefs = [{ id: "level_0", objects: [] }];
   levelImg = new Array(levelDefs.length).fill(null);
   levelDefaultImg = new Array(levelDefs.length).fill(null);
@@ -1967,8 +2427,15 @@ function getHtmlMenuUi() {
   const settingsButton = document.getElementById("menu-player-settings");
   const settingsIcon = document.getElementById("menu-player-settings-icon");
   const settingsPanel = document.getElementById("menu-settings-panel");
+  const editorButton = document.getElementById("menu-settings-editor");
+  const importCustomLevelsButton = document.getElementById("menu-settings-import-custom");
+  const exportCustomLevelsButton = document.getElementById("menu-settings-export-custom");
+  const customActionsRow = document.getElementById("menu-settings-custom-row");
+  const filterLevelsButton = document.getElementById("menu-settings-filter-levels");
+  const importCustomLevelsInput = document.getElementById("menu-settings-import-file");
+  const clearCustomLevelsButton = document.getElementById("menu-settings-clear-custom");
   const clearDataButton = document.getElementById("menu-settings-clear");
-  if (!overlay || !levelList || !scrollbarTrack || !scrollbarHandle || !playerNameButton || !prevButton || !nextButton || !deleteButton || !settingsButton || !settingsPanel || !clearDataButton) return null;
+  if (!overlay || !levelList || !scrollbarTrack || !scrollbarHandle || !playerNameButton || !prevButton || !nextButton || !deleteButton || !settingsButton || !settingsPanel || !editorButton || !importCustomLevelsButton || !exportCustomLevelsButton || !customActionsRow || !filterLevelsButton || !importCustomLevelsInput || !clearCustomLevelsButton || !clearDataButton) return null;
 
   htmlMenuUi = {
     overlay,
@@ -1982,6 +2449,13 @@ function getHtmlMenuUi() {
     settingsButton,
     settingsIcon,
     settingsPanel,
+    editorButton,
+    importCustomLevelsButton,
+    exportCustomLevelsButton,
+    customActionsRow,
+    filterLevelsButton,
+    importCustomLevelsInput,
+    clearCustomLevelsButton,
     clearDataButton,
   };
   if (settingsIcon) renderMenuSettingsGearIcon(settingsIcon);
@@ -2004,8 +2478,30 @@ function getHtmlMenuUi() {
 
   const CARD_TAP_DRAG_THRESHOLD_PX = 8;
   const clampNumber = (value, minValue, maxValue) => Math.max(minValue, Math.min(maxValue, value));
+  const updateSettingsPanelActionVisibility = () => {
+    const showCustomActions = normalizeLevelMenuFilter(levelMenuFilter) === "custom";
+    customActionsRow.hidden = !showCustomActions;
+    importCustomLevelsButton.hidden = !showCustomActions;
+    exportCustomLevelsButton.hidden = !showCustomActions;
+    clearCustomLevelsButton.hidden = !showCustomActions;
+  };
+  const updateSettingsPanelPlacement = () => {
+    settingsPanel.classList.remove("is-side-open");
+    const container = settingsPanel.parentElement;
+    if (!container || typeof container.getBoundingClientRect !== "function") return;
+    const viewportWidth = Number(window.innerWidth) || Number(document.documentElement?.clientWidth) || 0;
+    if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) return;
+    const containerRect = container.getBoundingClientRect();
+    const desiredPanelWidth = Math.min(280, Math.max(180, viewportWidth * 0.92));
+    const requiredSpace = desiredPanelWidth + 8;
+    const spaceRight = viewportWidth - containerRect.right;
+    if (spaceRight >= requiredSpace) settingsPanel.classList.add("is-side-open");
+  };
   const setSettingsPanelOpen = (open) => {
     const show = Boolean(open);
+    updateSettingsPanelActionVisibility();
+    if (show) updateSettingsPanelPlacement();
+    else settingsPanel.classList.remove("is-side-open");
     settingsPanel.hidden = !show;
     settingsButton.setAttribute("aria-expanded", show ? "true" : "false");
   };
@@ -2082,6 +2578,7 @@ function getHtmlMenuUi() {
   const updateMenuLayout = () => {
     updateLevelCardWidthForHeight();
     updateScrollbarFromLevelList();
+    if (!settingsPanel.hidden) updateSettingsPanelPlacement();
   };
   let menuLayoutRafId = 0;
   const requestMenuLayoutUpdate = () => {
@@ -2155,7 +2652,7 @@ function getHtmlMenuUi() {
   const stopPropagation = (event) => {
     if (event && typeof event.stopPropagation === "function") event.stopPropagation();
   };
-  for (const el of [overlay, levelList, scrollbarTrack, playerNameButton, prevButton, nextButton, deleteButton, settingsButton, settingsPanel, clearDataButton]) {
+  for (const el of [overlay, levelList, scrollbarTrack, playerNameButton, prevButton, nextButton, deleteButton, settingsButton, settingsPanel, editorButton, importCustomLevelsButton, exportCustomLevelsButton, customActionsRow, filterLevelsButton, importCustomLevelsInput, clearCustomLevelsButton, clearDataButton]) {
     el.addEventListener("pointerdown", stopPropagation);
     el.addEventListener("pointerup", stopPropagation);
     el.addEventListener("touchstart", stopPropagation, { passive: true });
@@ -2196,6 +2693,54 @@ function getHtmlMenuUi() {
     event.stopPropagation();
     setSettingsPanelOpen(settingsPanel.hidden);
   });
+  editorButton.addEventListener("pointerup", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSettingsPanelOpen(false);
+    openEditorPage(false);
+  });
+  editorButton.addEventListener("click", (event) => {
+    // Keep keyboard activation (Enter/Space) working without duplicating pointer flows.
+    if (event.detail !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSettingsPanelOpen(false);
+    openEditorPage(false);
+  });
+  importCustomLevelsButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    importCustomLevelsInput.value = "";
+    importCustomLevelsInput.click();
+  });
+  importCustomLevelsInput.addEventListener("change", () => {
+    const file = importCustomLevelsInput.files && importCustomLevelsInput.files[0];
+    importCustomLevelsInput.value = "";
+    if (!file) return;
+    importCustomLevelsFile(file);
+    setSettingsPanelOpen(false);
+  });
+  exportCustomLevelsButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    exportCustomLevelsToFile();
+    setSettingsPanelOpen(false);
+  });
+  filterLevelsButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    cycleLevelMenuFilter();
+    updateSettingsPanelActionVisibility();
+    filterLevelsButton.textContent = `Levels: ${levelMenuFilterLabel()}`;
+    refreshHtmlLevelMenu(false);
+  });
+  clearCustomLevelsButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!clearStoredCustomLevels()) return;
+    setSettingsPanelOpen(false);
+  });
   clearDataButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2207,6 +2752,9 @@ function getHtmlMenuUi() {
     const target = event?.target;
     if (!target || typeof target.closest !== "function") return;
     if (target.closest("#menu-settings-panel") || target.closest("#menu-player-settings")) return;
+    for (const menu of levelList.querySelectorAll(".level-menu-card-actions")) {
+      menu.hidden = true;
+    }
     setSettingsPanelOpen(false);
   });
 
@@ -2402,10 +2950,18 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
   ui.nextButton.hidden = !hasMultiplePlayers;
   ui.deleteButton.disabled = !hasPlayer;
   ui.deleteButton.hidden = !hasPlayer;
+  if (ui.filterLevelsButton) ui.filterLevelsButton.textContent = `Levels: ${levelMenuFilterLabel()}`;
+  const showCustomActions = normalizeLevelMenuFilter(levelMenuFilter) === "custom";
+  if (ui.customActionsRow) ui.customActionsRow.hidden = !showCustomActions;
+  if (ui.clearCustomLevelsButton) ui.clearCustomLevelsButton.hidden = !showCustomActions;
 
   const scrollLeft = preserveScroll ? ui.levelList.scrollLeft : 0;
+  const customMode = normalizeLevelMenuFilter(levelMenuFilter) === "custom";
+  const visibleLevelIndices = getFilteredLevelIndices();
   const fragment = document.createDocumentFragment();
-  for (let i = 0; i < getLevelCount(); i++) {
+  for (let visibleIndex = 0; visibleIndex < visibleLevelIndices.length; visibleIndex++) {
+    const i = visibleLevelIndices[visibleIndex];
+    const displayLevelNumber = customMode ? visibleIndex : i;
     const card = document.createElement("button");
     card.type = "button";
     card.className = "level-menu-card";
@@ -2434,7 +2990,7 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
       const previewImgCurrent = document.createElement("img");
       previewImgCurrent.className = "level-menu-preview-image level-menu-preview-current";
       previewImgCurrent.src = currentSrc;
-      previewImgCurrent.alt = `Level ${i + 1} preview`;
+      previewImgCurrent.alt = `Level ${displayLevelNumber} preview`;
       previewWrap.appendChild(previewImgCurrent);
 
       if (isSolved && defaultPreviewData && defaultPreviewData !== currentSrc) {
@@ -2455,9 +3011,91 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
     const levelLabel = document.createElement("span");
     levelLabel.className = "level-menu-label";
     if (isSolved) levelLabel.classList.add("is-solved");
-    levelLabel.textContent = `${i + 1}`;
-    levelLabel.setAttribute("aria-label", `Level ${i + 1}${isSolved ? " solved" : ""}`);
+    levelLabel.textContent = `${displayLevelNumber}`;
+    levelLabel.setAttribute("aria-label", `Level ${displayLevelNumber}${isSolved ? " solved" : ""}`);
     previewWrap.appendChild(levelLabel);
+
+    const isCustomCard = isCustomLevelDefinition(levelDefs[i]);
+    if (isCustomCard) {
+      const actionsMenu = document.createElement("div");
+      actionsMenu.className = "level-menu-card-actions";
+      actionsMenu.hidden = true;
+
+      const editButton = document.createElement("button");
+      editButton.type = "button";
+      editButton.className = "level-menu-card-action";
+      editButton.textContent = "Edit";
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "level-menu-card-action";
+      deleteButton.textContent = "Delete";
+
+      actionsMenu.appendChild(editButton);
+      actionsMenu.appendChild(deleteButton);
+
+      const settingsChip = document.createElement("button");
+      settingsChip.type = "button";
+      settingsChip.className = "level-menu-card-settings";
+      settingsChip.setAttribute("aria-label", "Custom level options");
+      if (ui.settingsIcon) {
+        const iconClone = ui.settingsIcon.cloneNode(true);
+        iconClone.removeAttribute("id");
+        iconClone.setAttribute("aria-hidden", "true");
+        settingsChip.appendChild(iconClone);
+      } else {
+        settingsChip.textContent = "⚙";
+      }
+
+      const stopEvent = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      };
+
+      settingsChip.addEventListener("pointerdown", stopEvent);
+      settingsChip.addEventListener("click", (event) => {
+        stopEvent(event);
+        const shouldShow = actionsMenu.hidden;
+        for (const menu of ui.levelList.querySelectorAll(".level-menu-card-actions")) {
+          menu.hidden = true;
+        }
+        actionsMenu.hidden = !shouldShow;
+      });
+
+      actionsMenu.addEventListener("pointerdown", stopEvent);
+      actionsMenu.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+
+      editButton.addEventListener("pointerdown", stopEvent);
+      editButton.addEventListener("pointerup", (event) => {
+        if (event.button !== 0) return;
+        stopEvent(event);
+        actionsMenu.hidden = true;
+        if (!openCustomLevelInEditor(levelDefs[i]?.id, { preferNewTab: false, fallbackLevelNumber: displayLevelNumber })) {
+          window.alert("Could not open this custom level in the editor.");
+        }
+      });
+      editButton.addEventListener("click", (event) => {
+        // Keep keyboard activation (Enter/Space) working without duplicating pointer flows.
+        if (event.detail !== 0) return;
+        stopEvent(event);
+        actionsMenu.hidden = true;
+        if (!openCustomLevelInEditor(levelDefs[i]?.id, { preferNewTab: false, fallbackLevelNumber: displayLevelNumber })) {
+          window.alert("Could not open this custom level in the editor.");
+        }
+      });
+
+      deleteButton.addEventListener("pointerdown", stopEvent);
+      deleteButton.addEventListener("click", (event) => {
+        stopEvent(event);
+        actionsMenu.hidden = true;
+        deleteCustomLevelByLevelDefId(levelDefs[i]?.id);
+      });
+
+      previewWrap.appendChild(settingsChip);
+      previewWrap.appendChild(actionsMenu);
+    }
 
     const scoreWrap = document.createElement("div");
     scoreWrap.className = "level-menu-score";
@@ -2905,7 +3543,7 @@ function loadScores() {
 
 function saveScores() { localStorage.setItem(SCORE_KEY, JSON.stringify(scoreStore)); }
 function clearAllGameData() {
-  const confirmed = window.confirm("Delete all saved game data? This will clear players, records, and saved level previews.");
+  const confirmed = window.confirm("Delete all saved game data? This will clear players, records, custom levels, and saved level previews.");
   if (!confirmed) return false;
 
   try {
@@ -2913,7 +3551,7 @@ function clearAllGameData() {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key) continue;
-      if (key === SCORE_KEY || key === EDITOR_TEST_LEVEL_KEY || key.startsWith(PREVIEW_KEY)) keysToDelete.push(key);
+      if (key === SCORE_KEY || key === EDITOR_TEST_LEVEL_KEY || key === CUSTOM_LEVELS_KEY || key === CUSTOM_LEVEL_META_KEY || key.startsWith(PREVIEW_KEY)) keysToDelete.push(key);
     }
     for (const key of keysToDelete) localStorage.removeItem(key);
   } catch (err) {

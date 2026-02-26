@@ -68,8 +68,8 @@
     }
 
     .hint-collapsible {
-      margin: 0 0 12px;
-      padding: 8px 10px;
+      margin: 0 0 6px;
+      padding: 4px 10px;
       border: 1px solid var(--panel-border);
       border-radius: 8px;
       background: #f9fbff;
@@ -310,6 +310,15 @@
       font-size: 0.8rem;
     }
 
+    .stage-menu-button {
+      position: absolute;
+      top: 16px;
+      left: 8px;
+      z-index: 2;
+      padding: 6px 11px;
+      font-size: 0.8rem;
+    }
+
     .canvas-shell {
       border: 1px solid #3e5c7b;
       border-radius: 0;
@@ -415,22 +424,30 @@
       <details class="panel-section" open>
         <summary>Export</summary>
         <label>Level Number<input type="number" id="levelNumber" min="0" max="999" value="0" /></label>
-        <div class="button-row">
-          <button type="button" id="generateCode">Generate Snippet</button>
-          <button type="button" id="copyCode">Copy Code</button>
-        </div>
-        <label class="output-block">Output
-          <textarea id="codeOutput" readonly></textarea>
-        </label>
-        <div class="button-row">
-          <button type="button" id="downloadJson">Download JSON</button>
+        <details class="hint-collapsible" style="margin-top: 6px;">
+          <summary>Snippet Output</summary>
+          <div class="button-row" style="margin-top: 8px;">
+            <button type="button" id="generateCode">Update Snippet</button>
+            <button type="button" id="copyCode">Copy Code</button>
+          </div>
+          <label class="output-block">Output
+            <textarea id="codeOutput" readonly></textarea>
+          </label>
+        </details>
+        <div class="button-row" style="margin-top: 6px;">
+          <button type="button" id="downloadJson">Export JSON</button>
           <label class="file-picker">Import JSON<input type="file" id="importJson" accept=".json,application/json" /></label>
+        </div>
+        <div class="button-row" style="margin-top: 6px;">
+          <button type="button" id="saveToGame">Save To Game</button>
+          <span></span>
         </div>
         <p class="status" id="status"></p>
       </details>
     </aside>
 
     <main class="stage">
+      <button type="button" id="backToMenu" class="stage-menu-button">Menu</button>
       <button type="button" id="testInGame" class="stage-test-button">Test</button>
       <div class="canvas-shell">
         <canvas id="editorCanvas" width="1024" height="768"></canvas>

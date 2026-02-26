@@ -5,6 +5,8 @@ const BASE_HEIGHT = 768;
 const DEFAULT_CIRCLE_RADIUS = BASE_WIDTH / 50;
 const STORAGE_KEY = "connect_level_editor_v1";
 const EDITOR_TEST_LEVEL_KEY = "connect_editor_test_level_v1";
+const EDITOR_LOAD_LEVEL_KEY = "connect_editor_load_level_v1";
+const CUSTOM_LEVELS_KEY = "connect_custom_levels_v1";
 const EDITOR_TEST_URL = "index.html?editor_test=1";
 
 const TYPE_CIRCLE = "circle";
@@ -72,6 +74,7 @@ const buttons = {
   addArcBox: document.getElementById("addArcBox"),
   addShape: document.getElementById("addShape"),
   addRotorBox: document.getElementById("addRotorBox"),
+  backToMenu: document.getElementById("backToMenu"),
   duplicateObject: document.getElementById("duplicateObject"),
   deleteObject: document.getElementById("deleteObject"),
   centerObject: document.getElementById("centerObject"),
@@ -81,6 +84,7 @@ const buttons = {
   addToRotor: document.getElementById("addToRotor"),
   generateCode: document.getElementById("generateCode"),
   copyCode: document.getElementById("copyCode"),
+  saveToGame: document.getElementById("saveToGame"),
   downloadJson: document.getElementById("downloadJson"),
   testInGame: document.getElementById("testInGame")
 };
@@ -116,7 +120,8 @@ init();
 
 function init() {
   bindEvents();
-  if (!loadFromStorage()) {
+  const loadedFromGame = loadPendingLevelFromGame();
+  if (!loadedFromGame && !loadFromStorage()) {
     addDefaultObjects();
   }
   els.valueMode.value = state.valueMode;
@@ -125,6 +130,53 @@ function init() {
   renderPropertyEditor();
   renderExport();
   requestAnimationFrame(draw);
+}
+
+function loadPendingLevelFromGame() {
+  try {
+    const raw = window.localStorage.getItem(EDITOR_LOAD_LEVEL_KEY);
+    if (!raw) return false;
+    window.localStorage.removeItem(EDITOR_LOAD_LEVEL_KEY);
+    const parsed = JSON.parse(raw);
+    const rawObjects = Array.isArray(parsed?.objects) ? parsed.objects : null;
+    if (!rawObjects) return false;
+
+    const imported = [];
+    for (const rawObject of rawObjects) {
+      const obj = normalizeRelativeLevelObject(rawObject);
+      if (obj) imported.push(obj);
+    }
+
+    state.objects = imported;
+    ensureMandatoryCircles();
+
+    let resolvedLevel = null;
+    if (Number.isInteger(parsed?.editorLevel)) {
+      resolvedLevel = parsed.editorLevel;
+    } else if (Number.isInteger(parsed?.id)) {
+      resolvedLevel = parsed.id;
+    } else {
+      const idText = typeof parsed?.id === "string" ? parsed.id.trim() : "";
+      const plainNum = idText.match(/^\d+$/);
+      const editorNum = idText.match(/^editor_(\d+)$/i);
+      if (plainNum) resolvedLevel = Number(plainNum[0]);
+      else if (editorNum) resolvedLevel = Number(editorNum[1]);
+    }
+
+    if (Number.isInteger(resolvedLevel)) {
+      els.levelNumber.value = String(clamp(resolvedLevel, 0, 999));
+    }
+
+    if (state.objects[0]) setSingleSelection(state.objects[0].id);
+    else setSingleSelection(null);
+    state.nextId = state.objects.reduce((maxId, obj) => Math.max(maxId, obj.id), 0) + 1;
+    persist();
+    renderStatus("Loaded custom level from game.");
+    return true;
+  } catch (error) {
+    renderStatus(`Could not load level from game: ${error.message}`);
+    return false;
+  }
 }
 
 function bindEvents() {
@@ -143,7 +195,9 @@ function bindEvents() {
 
   buttons.generateCode.addEventListener("click", renderExport);
   buttons.copyCode.addEventListener("click", copyCodeToClipboard);
+  buttons.saveToGame.addEventListener("click", saveLevelToGame);
   buttons.downloadJson.addEventListener("click", downloadJson);
+  buttons.backToMenu.addEventListener("click", goToGameMenu);
   buttons.testInGame.addEventListener("click", testInGame);
   els.levelNumber.addEventListener("input", renderExport);
 
@@ -201,6 +255,10 @@ function bindEvents() {
   els.canvas.addEventListener("pointercancel", onPointerUp);
   els.canvas.addEventListener("pointerleave", onPointerLeave);
   els.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+}
+
+function goToGameMenu() {
+  window.location.href = "index.html";
 }
 
 function addDefaultObjects() {
@@ -2907,6 +2965,7 @@ function renderExport() {
   const level = clamp(Math.floor(Number(els.levelNumber.value) || 0), 0, 999);
   els.levelNumber.value = String(level);
   els.codeOutput.value = generateCaseSnippet(level);
+  updateSaveToGameButtonLabel(level);
 }
 
 function generateCaseSnippet(level) {
@@ -3370,6 +3429,70 @@ function downloadJson() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   renderStatus("JSON downloaded.");
+}
+
+function loadStoredCustomLevelsPayload() {
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_LEVELS_KEY);
+    if (!raw) return { version: 1, levels: [] };
+    const parsed = JSON.parse(raw);
+    const levels = Array.isArray(parsed?.levels) ? parsed.levels : [];
+    return { version: Number(parsed?.version) || 1, levels };
+  } catch {
+    return { version: 1, levels: [] };
+  }
+}
+
+function getCustomEditorSlotId(level) {
+  return `editor_${level}`;
+}
+
+function findCustomLevelIndexForEditorLevel(level, levels) {
+  const slotId = getCustomEditorSlotId(level);
+  const source = Array.isArray(levels) ? levels : [];
+  return source.findIndex((item) => {
+    if (!item || typeof item !== "object") return false;
+    if (String(item.id || "").trim() === slotId) return true;
+    return Number.isInteger(item.editorLevel) && item.editorLevel === level;
+  });
+}
+
+function updateSaveToGameButtonLabel(level = null) {
+  if (!buttons.saveToGame) return;
+  const targetLevel = Number.isInteger(level) ? level : getCurrentLevelNumber();
+  const store = loadStoredCustomLevelsPayload();
+  const levels = Array.isArray(store?.levels) ? store.levels : [];
+  const existingIndex = findCustomLevelIndexForEditorLevel(targetLevel, levels);
+  if (existingIndex >= 0) buttons.saveToGame.textContent = `Update level ${targetLevel}`;
+  else buttons.saveToGame.textContent = "Add to game";
+}
+
+function saveLevelToGame() {
+  const level = getCurrentLevelNumber();
+  const payload = buildSingleLevelPayload(level);
+  const store = loadStoredCustomLevelsPayload();
+  const levels = Array.isArray(store.levels) ? store.levels.slice() : [];
+  const slotId = getCustomEditorSlotId(level);
+  const entry = {
+    id: slotId,
+    editorLevel: level,
+    name: `Editor ${level}`,
+    savedAt: Date.now(),
+    objects: payload.objects
+  };
+
+  const existingIndex = findCustomLevelIndexForEditorLevel(level, levels);
+  if (existingIndex >= 0) levels[existingIndex] = entry;
+  else levels.push(entry);
+
+  const out = { version: 1, levels };
+  try {
+    window.localStorage.setItem(CUSTOM_LEVELS_KEY, JSON.stringify(out));
+    updateSaveToGameButtonLabel(level);
+    renderStatus(`Saved level ${level} to game custom levels (${levels.length} total).`);
+  } catch (error) {
+    renderStatus(`Could not save custom level: ${error.message}`);
+  }
 }
 
 function getCurrentLevelNumber() {

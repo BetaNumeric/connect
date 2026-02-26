@@ -191,9 +191,15 @@
       border-radius: 10px;
       padding: 8px;
       box-sizing: border-box;
-      z-index: 2;
+      z-index: 20;
       display: grid;
       gap: 6px;
+    }
+
+    .menu-settings-panel.is-side-open {
+      top: 0;
+      left: calc(100% + 8px);
+      right: auto;
     }
 
     .menu-settings-panel[hidden] {
@@ -226,6 +232,16 @@
 
     .menu-settings-action:hover {
       background: var(--ui-black);
+    }
+
+    .menu-settings-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .menu-settings-row[hidden] {
+      display: none;
     }
 
     #level-menu-list {
@@ -309,6 +325,78 @@
 
     .level-menu-card.is-current {
       border-width: 2px;
+    }
+
+    .level-menu-card-settings {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 0;
+      background: var(--ui-gray-mid);
+      color: var(--ui-white);
+      border-radius: 50%;
+      padding: 0;
+      border: 0;
+      cursor: pointer;
+      z-index: 1;
+    }
+
+    .level-menu-card-settings:hover,
+    .level-menu-card-settings:focus-visible {
+      background: var(--ui-black);
+      outline: none;
+    }
+
+    .level-menu-card-settings .menu-player-icon {
+      display: block;
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      flex: 0 0 auto;
+    }
+
+    .level-menu-card-actions {
+      position: absolute;
+      top: 40px;
+      right: 8px;
+      width: 126px;
+      display: grid;
+      gap: 4px;
+      background: var(--ui-white);
+      border-radius: 8px;
+      padding: 6px;
+      z-index: 2;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+    }
+
+    .level-menu-card-actions[hidden] {
+      display: none;
+    }
+
+    .level-menu-card-action {
+      appearance: none;
+      -webkit-appearance: none;
+      border: 0;
+      border-radius: 6px;
+      background: var(--ui-gray-mid);
+      color: var(--ui-white);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.1;
+      text-align: left;
+      cursor: pointer;
+      padding: 8px 10px;
+    }
+
+    .level-menu-card-action:hover,
+    .level-menu-card-action:focus-visible {
+      background: var(--ui-black);
+      outline: none;
     }
 
     .level-menu-preview {
@@ -524,7 +612,15 @@
           </button>
           <div id="menu-settings-panel" class="menu-settings-panel" role="menu" aria-label="Settings" hidden>
             <div class="menu-settings-title">Settings</div>
+            <button id="menu-settings-editor" class="menu-settings-action" type="button">Open level editor</button>
+            <button id="menu-settings-filter-levels" class="menu-settings-action" type="button">Levels: Default</button>
+            <div id="menu-settings-custom-row" class="menu-settings-row">
+              <button id="menu-settings-import-custom" class="menu-settings-action" type="button">Import</button>
+              <button id="menu-settings-export-custom" class="menu-settings-action" type="button">Export</button>
+            </div>
+            <button id="menu-settings-clear-custom" class="menu-settings-action" type="button">Delete all custom levels</button>
             <button id="menu-settings-clear" class="menu-settings-action" type="button">Delete all game data</button>
+            <input id="menu-settings-import-file" type="file" accept=".json,application/json" hidden />
           </div>
         </div>
       </header>
