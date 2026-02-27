@@ -66,6 +66,10 @@ const ROTOR_GEAR_CORE_RATIO = 0.45;
 const DEFAULT_ROTOR_MOTOR_SPEED_DEG = 180;
 const DEFAULT_ROTOR_MOTOR_DIRECTION = 1;
 const DEFAULT_ROTOR_MOTOR_TORQUE = 1000000000;
+const MODE_PLAY = 1;
+const MODE_RESULT = 2;
+const MODE_MENU = 4;
+const MODE_NEXT_LEVEL = 5;
 
 let box2d;
 let canvasRenderer;
@@ -80,7 +84,7 @@ let d = 0, circleR = 0;
 // Location and size of the current button.
 let buttonX = 0, buttonY = 0, buttonW = 0;
 // Current level and game mode.
-let level = 0, gameMode = 4;
+let level = 0, gameMode = MODE_MENU;
 let imgX = 0, imgY = 0, imgW = 0, imgH = 0, imgScroll = 0;
 let selectedLevel = -1;
 let levelDefs = [];
@@ -1038,6 +1042,14 @@ class Rotor {
     if (this.fixture) this.fixture.delete();
     if (this.body) box2d.destroy(this.body);
   }
+  applyMotorHardPin() {
+    if (!this.motor || !this.body || !this.fixture) return;
+    const anchor = this.fixture.body.getWorldCenter();
+    if (!anchor) return;
+    const angle = this.body.getAngle();
+    this.body.setTransform(planck.Vec2(anchor.x, anchor.y), angle);
+    this.body.setLinearVelocity(planck.Vec2(0, 0));
+  }
   done() { return false; }
   draw() {
     const p = box2d.getBodyPos(this.body);
@@ -1066,6 +1078,10 @@ class Rotor {
     if (this.motor) {
       const spin = degrees(-this.body.getAngle());
       drawRotorHubGear(a.x, a.y, this.h / 4, spin);
+      if (gameMode === MODE_PLAY && !physics) {
+        const dir = Number(this.motorDirection) < 0 ? -1 : 1;
+        drawRotorMotorDirectionArrow(a.x, a.y, this.h * 1.2, dir, COLOR_GRAY_LIGHT);
+      }
     } else {
       drawRotorHubCircle(a.x, a.y, this.h / 4);
     }
@@ -1167,7 +1183,7 @@ function setup() {
 
   if (editorTestMode) {
     if (!player) player = "Editor Test";
-    gameMode = 1;
+    gameMode = MODE_PLAY;
     level = 0;
     loadLevel(false);
   }
@@ -1189,7 +1205,7 @@ function setup() {
         scoreStore.rows = scoreStore.rows.map(normalizeRow);
         if (level > getMaxLevelIndex()) level = 0;
         levelsLoadingFromSources = false;
-        if (gameMode === 4) refreshHtmlLevelMenu(false);
+        if (gameMode === MODE_MENU) refreshHtmlLevelMenu(false);
         if (hasFetchedLevels) console.info(`Loaded ${getLevelCount()} levels from manifest/data files.`);
         else console.warn("Using CONNECT_LEVEL_DATA fallback because manifest/data files were unavailable.");
       })
@@ -1203,7 +1219,7 @@ function setup() {
           scoreStore.rows = scoreStore.rows.map(normalizeRow);
           if (level > getMaxLevelIndex()) level = 0;
           levelsLoadingFromSources = false;
-          if (gameMode === 4) refreshHtmlLevelMenu(false);
+          if (gameMode === MODE_MENU) refreshHtmlLevelMenu(false);
         } else {
           levelsLoadingFromSources = false;
         }
@@ -2233,19 +2249,18 @@ function draw() {
   drawPermit = true;
   // Prohibits drawing lines outside of the screen.
   if (mouseX < d / 2 || mouseX > width - d / 2 || mouseY < d / 2 || mouseY > height - d / 2) drawPermit = false;
-  if (gameMode !== 4) {
+  if (gameMode !== MODE_MENU) {
     if (physics) box2d.step(deltaTime / 1000);
     drawObjects();
   }
 
-  if (gameMode === 0) drawStartMode();
-  if (gameMode === 1) drawPlayMode(); else cursor(ARROW);
-  if (gameMode === 2) drawResultMode();
-  if ((gameMode === 1 && physics) || (gameMode === 2 && levelUp)) drawResetButton();
-  if (gameMode === 0 || gameMode === 1 || gameMode === 2) drawGlobalMenuButton();
-  if (gameMode === 4 && (levelsLoadingFromSources || menuOpenPending)) drawLevelMenuLoading(menuOpenPending ? "Opening menu..." : "Loading levels...");
-  else if (gameMode === 4 && !htmlMenuDrawn) drawLevelMenu();
-  if (gameMode === 5) {
+  if (gameMode === MODE_PLAY) drawPlayMode(); else cursor(ARROW);
+  if (gameMode === MODE_RESULT) drawResultMode();
+  if ((gameMode === MODE_PLAY && physics) || (gameMode === MODE_RESULT && levelUp)) drawResetButton();
+  if (gameMode === MODE_PLAY || gameMode === MODE_RESULT) drawGlobalMenuButton();
+  if (gameMode === MODE_MENU && (levelsLoadingFromSources || menuOpenPending)) drawLevelMenuLoading(menuOpenPending ? "Opening menu..." : "Loading levels...");
+  else if (gameMode === MODE_MENU && !htmlMenuDrawn) drawLevelMenu();
+  if (gameMode === MODE_NEXT_LEVEL) {
     let shouldLoadNextLevel = true;
     if (editorTestMode) {
       level = 0;
@@ -2260,21 +2275,6 @@ function draw() {
     }
     if (shouldLoadNextLevel) loadLevel(false);
   }
-}
-
-function drawStartMode() {
-  // Draw level info and play button before entering drawing mode.
-  noStroke();
-  fill(COLOR_WHITE, ALPHA_DIM); noStroke(); rect(width / 2, height / 2, width, height);
-  buttonX = width / 2; buttonY = height / 2; buttonW = height / 4;
-  textAlign(CENTER); textSize(width / 20); fill(COLOR_BLACK); text(`Level: ${level + 1}`, width / 2, height / 5);
-  textAlign(LEFT); textSize(width / 30);
-  calcScore(level);
-  const startScoreLines = [];
-  if (playerMinLines !== null && minLines !== 0) startScoreLines.push(formatFewestScore(playerMinLines, minLines));
-  if (playerMinTime !== null && minTime !== 0) startScoreLines.push(formatFastestScore(playerMinTime, minTime));
-  drawCenteredLeftAlignedTextLines(width / 2, height - height / 4, startScoreLines, height / 12);
-  drawPlayIcon(buttonX, buttonY, buttonW, dist(mouseX, mouseY, buttonX, buttonY) < buttonW / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
 }
 
 function drawPlayMode() {
@@ -2314,7 +2314,7 @@ function drawResetButton() {
   const rx = r.x + r.w / 2;
   const ry = r.y + r.h / 2;
   const rw = r.w;
-  if (gameMode === 1) testConnection();
+  if (gameMode === MODE_PLAY) testConnection();
   drawRetryIcon(rx, ry, rw, dist(mouseX, mouseY, rx, ry) < rw / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
 }
 
@@ -2398,6 +2398,28 @@ function drawRetryIcon(x, y, size, shade) {
   const ah = size * 0.12;
   line(tipX, tipY, tipX - ah, tipY - ah );
   line(tipX, tipY, tipX - ah , tipY + ah);
+  pop();
+}
+
+function drawRotorMotorDirectionArrow(x, y, size, direction = 1, shade = COLOR_GRAY_LIGHT) {
+  const dir = Number(direction) < 0 ? 1 : -1;
+  push();
+  translate(x, y);
+  if (dir < 0) scale(-1, 1);
+  rotate(radians(145));
+  noFill();
+  stroke(shade);
+  strokeWeight(Math.max(2.5, size * 0.05));
+  strokeCap(ROUND);
+  const r = size * 0.45;
+  const a0 = radians(75);
+  const a1 = radians(360);
+  arc(0, 0, r * 2, r * 2, a0, a1);
+  const tipX = cos(a0) * r;
+  const tipY = sin(a0) * r;
+  const ah = size * 0.125;
+  line(tipX, tipY, tipX - ah, tipY - ah);
+  line(tipX, tipY, tipX - ah, tipY + ah);
   pop();
 }
 
@@ -2732,7 +2754,7 @@ function getHtmlMenuUi() {
     event.stopPropagation();
     cycleLevelMenuFilter();
     updateSettingsPanelActionVisibility();
-    filterLevelsButton.textContent = `Levels: ${levelMenuFilterLabel()}`;
+    filterLevelsButton.textContent = `Levels shown: ${levelMenuFilterLabel()}`;
     refreshHtmlLevelMenu(false);
   });
   clearCustomLevelsButton.addEventListener("click", (event) => {
@@ -2891,7 +2913,7 @@ function getHtmlMenuUi() {
 }
 
 function isHtmlLevelMenuActive() {
-  return htmlMenuVisible && gameMode === 4;
+  return htmlMenuVisible && gameMode === MODE_MENU;
 }
 
 function levelPreviewToDataUrl(preview) {
@@ -2932,7 +2954,7 @@ function openLevelFromHtmlMenu(levelIndex) {
   }
   level = levelIndex;
   loadLevel(false);
-  gameMode = 0;
+  gameMode = MODE_PLAY;
   setHtmlLevelMenuVisible(false);
 }
 
@@ -2950,7 +2972,7 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
   ui.nextButton.hidden = !hasMultiplePlayers;
   ui.deleteButton.disabled = !hasPlayer;
   ui.deleteButton.hidden = !hasPlayer;
-  if (ui.filterLevelsButton) ui.filterLevelsButton.textContent = `Levels: ${levelMenuFilterLabel()}`;
+  if (ui.filterLevelsButton) ui.filterLevelsButton.textContent = `Levels shown: ${levelMenuFilterLabel()}`;
   const showCustomActions = normalizeLevelMenuFilter(levelMenuFilter) === "custom";
   if (ui.customActionsRow) ui.customActionsRow.hidden = !showCustomActions;
   if (ui.clearCustomLevelsButton) ui.clearCustomLevelsButton.hidden = !showCustomActions;
@@ -3137,12 +3159,12 @@ function syncHtmlLevelMenuVisibility() {
     return false;
   }
 
-  if (gameMode === 4 && (levelsLoadingFromSources || menuOpenPending)) {
+  if (gameMode === MODE_MENU && (levelsLoadingFromSources || menuOpenPending)) {
     if (htmlMenuVisible) setHtmlLevelMenuVisible(false);
     return false;
   }
 
-  if (gameMode === 4) {
+  if (gameMode === MODE_MENU) {
     if (!htmlMenuVisible) {
       setHtmlLevelMenuVisible(true);
       refreshHtmlLevelMenu(false);
@@ -3343,11 +3365,11 @@ function getPointerCanvasPosition(event) {
 }
 
 function isGameMenuButtonAvailable() {
-  return gameMode === 0 || gameMode === 1 || gameMode === 2;
+  return gameMode === MODE_PLAY || gameMode === MODE_RESULT;
 }
 
 function isGameResetButtonAvailable() {
-  return (gameMode === 1 && physics) || (gameMode === 2 && levelUp);
+  return (gameMode === MODE_PLAY && physics) || (gameMode === MODE_RESULT && levelUp);
 }
 
 function getTouchButtonSlopPx() {
@@ -3432,7 +3454,7 @@ function enterMenu() {
   physics = false;
   linePos = [];
   linePosTest = [];
-  gameMode = 4;
+  gameMode = MODE_MENU;
   menuOpenPending = true;
   if (htmlMenuVisible) setHtmlLevelMenuVisible(false);
   // Keep transition feedback brief; menu content will render once via syncHtmlLevelMenuVisibility().
@@ -3450,7 +3472,7 @@ function getPlayerNames() {
 function promptForPlayerName() {
   let seed = sanitizePlayerName(player || "");
   while (true) {
-    const raw = window.prompt(`Enter player name (existing or new, max ${MAX_PLAYER_NAME_LENGTH} chars):`, seed);
+    const raw = window.prompt(`Enter player name (max ${MAX_PLAYER_NAME_LENGTH} chars):`, seed);
     if (raw === null) return false;
 
     const trimmed = String(raw).trim();
@@ -3612,7 +3634,7 @@ function loadStoredPreviews() {
   let updatedAny = false;
   const finalize = () => {
     if (pendingLoads !== 0) return;
-    if (updatedAny && gameMode === 4) refreshHtmlLevelMenu();
+    if (updatedAny && gameMode === MODE_MENU) refreshHtmlLevelMenu();
   };
 
   for (let i = 0; i <= getMaxLevelIndex(); i++) {
@@ -3642,7 +3664,7 @@ function saveLevelPreview(i) {
     levelImgDataUrl[i] = data;
     loadImage(data, (img) => {
       levelImg[i] = img;
-      if (gameMode === 4) refreshHtmlLevelMenu();
+      if (gameMode === MODE_MENU) refreshHtmlLevelMenu();
     }, () => {});
   } catch {}
 }
@@ -3707,7 +3729,7 @@ function testConnection() {
     const x = a.x - (a.x - b.x) / 2;
     const y = a.y - (a.y - b.y) / 2;
     for (let i = 0; i < PARTICLES_ON_CONNECT; i++) particles.push(new Particle(x, y, circleR / 2, circles[0].c));
-    gameMode = 2;
+    gameMode = MODE_RESULT;
     levelUp = true;
   }
 }
@@ -3716,7 +3738,7 @@ function keyPressed() {
   // Toggles debug info and handles mode hotkeys.
   if (player !== null) {
     if (key === "I" || key === "i") info = !info;
-    if (keyCode === ENTER) gameMode = 5;
+    if (keyCode === ENTER) gameMode = MODE_NEXT_LEVEL;
     if (keyCode === ESCAPE) { enterMenu(); return false; }
   }
   return true;
@@ -3811,15 +3833,15 @@ function mousePressed(event) {
     return false;
   }
   const menuRect = getMenuButtonRect(true);
-  menuButtonArmed = (gameMode === 0 || gameMode === 1 || gameMode === 2) && pointInRect(pressX, pressY, menuRect);
+  menuButtonArmed = (gameMode === MODE_PLAY || gameMode === MODE_RESULT) && pointInRect(pressX, pressY, menuRect);
   const resetRect = getResetButtonRect(true);
-  resetButtonArmed = (gameMode === 1 || (gameMode === 2 && levelUp)) && pointInRect(pressX, pressY, resetRect);
-  if (gameMode === 1 && (menuButtonArmed || resetButtonArmed)) return;
-  if (gameMode === 2 && (menuButtonArmed || resetButtonArmed)) return;
+  resetButtonArmed = (gameMode === MODE_PLAY || (gameMode === MODE_RESULT && levelUp)) && pointInRect(pressX, pressY, resetRect);
+  if (gameMode === MODE_PLAY && (menuButtonArmed || resetButtonArmed)) return;
+  if (gameMode === MODE_RESULT && (menuButtonArmed || resetButtonArmed)) return;
 
   checkEdge(pressX, pressY);
-  if (drawPermit && gameMode === 1) linePos.push(createVector(pressX, pressY));
-  if (gameMode === 4) {
+  if (drawPermit && gameMode === MODE_PLAY) linePos.push(createVector(pressX, pressY));
+  if (gameMode === MODE_MENU) {
     menuDragMode = "none";
     menuDragMoved = false;
     menuDragStartX = pressX;
@@ -3860,13 +3882,13 @@ function mouseDragged(event) {
     return false;
   }
   checkEdge(dragX, dragY);
-  if (drawPermit && gameMode === 1) {
+  if (drawPermit && gameMode === MODE_PLAY) {
     if (linePos.length > 0) {
       const l = linePos[linePos.length - 1];
       if (dist(dragX, dragY, l.x, l.y) > d) linePos.push(createVector(dragX, dragY));
     } else linePos.push(createVector(dragX, dragY));
   }
-  if (gameMode === 4) {
+  if (gameMode === MODE_MENU) {
     if (menuDragMode === "levels") {
       imgScroll = clampLevelScroll(imgScroll + (dragX - pmouseX));
     } else if (menuDragMode === "scrollbar") {
@@ -3882,7 +3904,7 @@ function mouseDragged(event) {
 function mouseWheel(e) {
   if (isHtmlLevelMenuActive()) return false;
   const c = e?.deltaY === 0 ? 0 : Math.sign(e?.deltaY || 0);
-  if (gameMode === 4 && c !== 0) imgScroll = clampLevelScroll(imgScroll + c * MENU_SCROLL_STEP_PX);
+  if (gameMode === MODE_MENU && c !== 0) imgScroll = clampLevelScroll(imgScroll + c * MENU_SCROLL_STEP_PX);
   return false;
 }
 
@@ -3901,7 +3923,7 @@ function mouseClicked(event) {
     Checks if a button is clicked and reloads/selects level. This avoids
     accidental reset while drawing because release is handled separately.
   */
-  if (gameMode === 4) {
+  if (gameMode === MODE_MENU) {
     if (menuDragMoved) {
       menuDragMoved = false;
       return;
@@ -3924,11 +3946,11 @@ function mouseClicked(event) {
     }
   }
 
-  if (clickY < imgY + imgH && clickY > imgY - imgH && gameMode === 4 && selectedLevel !== -1) {
+  if (clickY < imgY + imgH && clickY > imgY - imgH && gameMode === MODE_MENU && selectedLevel !== -1) {
     if (player === null && !promptForPlayerName()) return;
     level = selectedLevel;
     loadLevel(false);
-    gameMode = 0;
+    gameMode = MODE_PLAY;
   }
 }
 
@@ -3947,7 +3969,7 @@ function mouseReleased(event) {
     cancelPointerInteractionState();
     return false;
   }
-  if (gameMode === 4) {
+  if (gameMode === MODE_MENU) {
     menuDragMode = "none";
     menuScrollbarGrabOffsetX = 0;
   }
@@ -3956,7 +3978,7 @@ function mouseReleased(event) {
     : Math.max(6, Math.round(Math.min(width, height) * 0.008));
 
   if (
-    (gameMode === 0 || gameMode === 1 || gameMode === 2) &&
+    (gameMode === MODE_PLAY || gameMode === MODE_RESULT) &&
     menuButtonArmed &&
     pointInRectWithSlop(releaseX, releaseY, getMenuButtonRect(true), buttonReleaseSlop)
   ) {
@@ -3966,7 +3988,7 @@ function mouseReleased(event) {
     return;
   }
 
-  if (gameMode === 1) {
+  if (gameMode === MODE_PLAY) {
     let drewLine = false;
     if (linePos.length > 0) {
       lines.push(new LineBody(linePos, d));
@@ -3983,9 +4005,9 @@ function mouseReleased(event) {
     ) {
       loadLevel(false);
     }
-  } else if (gameMode === 2 && levelUp && resetButtonArmed && pointInRectWithSlop(releaseX, releaseY, getResetButtonRect(true), buttonReleaseSlop)) {
+  } else if (gameMode === MODE_RESULT && levelUp && resetButtonArmed && pointInRectWithSlop(releaseX, releaseY, getResetButtonRect(true), buttonReleaseSlop)) {
     loadLevel(false);
-  } else if ((gameMode === 0 || gameMode === 2) && player !== null && dist(releaseX, releaseY, buttonX, buttonY) < buttonW / 2) loadLevel();
+  } else if (gameMode === MODE_RESULT && player !== null && dist(releaseX, releaseY, buttonX, buttonY) < buttonW / 2) loadLevel();
   resetButtonArmed = false;
   menuButtonArmed = false;
 }
@@ -4026,7 +4048,7 @@ function touchStarted(event) {
   activeTouchUiButton = null;
   touchInteractionInProgress = isCanvasTouchEvent(event);
   if (!touchInteractionInProgress) return true;
-  if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
+  if (gameMode === MODE_PLAY || gameMode === MODE_RESULT || gameMode === MODE_MENU) {
     mousePressed(event);
     return false;
   }
@@ -4056,7 +4078,7 @@ function touchMoved(event) {
   }
   if (!touchInteractionInProgress) return true;
   if (event && !isCanvasTouchEvent(event)) return true;
-  if (gameMode === 0 || gameMode === 1 || gameMode === 2 || gameMode === 4) {
+  if (gameMode === MODE_PLAY || gameMode === MODE_RESULT || gameMode === MODE_MENU) {
     mouseDragged(event);
     return false;
   }
@@ -4101,12 +4123,12 @@ function touchEnded(event) {
     touchInteractionInProgress = false;
     return true;
   }
-  if (gameMode === 0 || gameMode === 1 || gameMode === 2) {
+  if (gameMode === MODE_PLAY || gameMode === MODE_RESULT) {
     mouseReleased(event);
     touchInteractionInProgress = false;
     return false;
   }
-  if (gameMode === 4) {
+  if (gameMode === MODE_MENU) {
     mouseReleased(event);
     mouseClicked(event);
     touchInteractionInProgress = false;
@@ -4208,7 +4230,7 @@ function checkEdge(px = mouseX, py = mouseY) {
 
 function loadLevel(advance = true) {
   // Deletes all level objects, resets variables, and (re)loads level content.
-  if (advance && gameMode !== 4 && levelUp && !editorTestMode) {
+  if (advance && gameMode !== MODE_MENU && levelUp && !editorTestMode) {
     if (level >= getMaxLevelIndex()) {
       enterMenu();
       return;
@@ -4228,7 +4250,7 @@ function loadLevel(advance = true) {
   linePos = []; linePosTest = []; totalLines = 0;
   runSetGlobalTimeRecord = false;
   runSetGlobalLineRecord = false;
-  if (gameMode !== 4) gameMode = 1;
+  if (gameMode !== MODE_MENU) gameMode = MODE_PLAY;
   buildLevel();
   physics = false;
   levelUp = false;
@@ -4247,7 +4269,7 @@ function drawObjects() {
     if (circles[i].done()) {
       for (let j = 0; j < PARTICLES_ON_FAIL; j++) particles.push(new Particle(circles[i].pos.x, circles[i].pos.y, circleR, circles[i].c));
       circles.splice(i, 1);
-      gameMode = 2;
+      gameMode = MODE_RESULT;
     }
   }
   for (let i = cShapes.length - 1; i >= 0; i--) { cShapes[i].draw(); if (cShapes[i].done()) cShapes.splice(i, 1); }
@@ -4256,14 +4278,18 @@ function drawObjects() {
     lines[i].draw();
     if (lines[i].done()) lines.splice(i, 1);
   }
-  for (let i = rotors.length - 1; i >= 0; i--) { rotors[i].draw(); if (rotors[i].done()) rotors.splice(i, 1); }
+  for (let i = rotors.length - 1; i >= 0; i--) {
+    rotors[i].applyMotorHardPin();
+    rotors[i].draw();
+    if (rotors[i].done()) rotors.splice(i, 1);
+  }
   for (let i = particles.length - 1; i >= 0; i--) { particles[i].move(); particles[i].draw(); if (!particles[i].alive) particles.splice(i, 1); }
 }
 function buildLevel() {
   // Builds the current level from JSON definitions.
   const def = levelDefs[level];
   if (!def) {
-    gameMode = 4;
+    gameMode = MODE_MENU;
     return;
   }
 
