@@ -123,6 +123,7 @@ let scoreStore = { rows: [], activeRowId: null };
 let editorTestMode = false;
 let htmlMenuUi = null;
 let htmlMenuVisible = false;
+let htmlMenuScrollLeft = 0;
 let levelMenuFilter = "default";
 
 class B2D {
@@ -2362,10 +2363,9 @@ function drawPlayMode() {
       if (!pointInRect(mouseX, mouseY, getMenuButtonRect(true))) noCursor();
       noStroke(); fill(COLOR_GRAY_MID); ellipse(mouseX, mouseY, d, d);
     }
-  strokeWeight(d); stroke(COLOR_GRAY_MID, ALPHA_DIM);
   if (mouseIsPressed && linePos.length > 0) {
     const l = linePos[linePos.length - 1];
-    line(mouseX, mouseY, l.x, l.y);
+    drawPendingLineSegment(l.x, l.y, mouseX, mouseY, d, ALPHA_DIM);
     if (info) {
       let dis = dist(l.x, l.y, mouseX, mouseY) / 10;
       noStroke(); fill(...COLOR_SUCCESS_RGB); ellipse(mouseX, mouseY, d, d); ellipse(l.x, l.y, d, d); fill(...COLOR_ERROR_RGB);
@@ -2375,6 +2375,35 @@ function drawPlayMode() {
         ellipse(tx, ty, d / 2, d / 2);
       }
     }
+  }
+}
+
+function drawPendingLineSegment(x0, y0, x1, y1, thickness, alpha = ALPHA_OPAQUE) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  noStroke();
+  fill(COLOR_GRAY_MID, alpha);
+  if (len > 0) {
+    push();
+    translate((x0 + x1) / 2, (y0 + y1) / 2);
+    rotate(Math.atan2(dy, dx));
+    rect(0, 0, len, thickness);
+    pop();
+  }
+  ellipse(x0, y0, thickness, thickness);
+  ellipse(x1, y1, thickness, thickness);
+}
+
+function drawPendingLinePath(points, thickness, alpha = ALPHA_OPAQUE) {
+  if (!Array.isArray(points) || points.length < 1) return;
+  for (let i = 1; i < points.length; i++) {
+    drawPendingLineSegment(points[i - 1].x, points[i - 1].y, points[i].x, points[i].y, thickness, alpha);
+  }
+  if (points.length === 1) {
+    noStroke();
+    fill(COLOR_GRAY_MID, alpha);
+    ellipse(points[0].x, points[0].y, thickness, thickness);
   }
 }
 
@@ -2945,6 +2974,7 @@ function getHtmlMenuUi() {
   window.addEventListener("wheel", handleMenuWheelEvent, { passive: false, capture: true });
 
   levelList.addEventListener("scroll", () => {
+    htmlMenuScrollLeft = levelList.scrollLeft;
     updateScrollbarFromLevelList();
   }, { passive: true });
 
@@ -2992,6 +3022,7 @@ function setHtmlLevelMenuVisible(visible) {
     return;
   }
 
+  if (!visible) htmlMenuScrollLeft = ui.levelList.scrollLeft;
   htmlMenuVisible = Boolean(visible);
   ui.overlay.classList.toggle("is-visible", htmlMenuVisible);
   ui.overlay.setAttribute("aria-hidden", htmlMenuVisible ? "false" : "true");
@@ -3037,7 +3068,7 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
   if (ui.customActionsRow) ui.customActionsRow.hidden = !showCustomActions;
   if (ui.clearCustomLevelsButton) ui.clearCustomLevelsButton.hidden = !showCustomActions;
 
-  const scrollLeft = preserveScroll ? ui.levelList.scrollLeft : 0;
+  const scrollLeft = preserveScroll ? htmlMenuScrollLeft : 0;
   const customMode = normalizeLevelMenuFilter(levelMenuFilter) === "custom";
   const visibleLevelIndices = getFilteredLevelIndices();
   const fragment = document.createDocumentFragment();
@@ -3202,6 +3233,7 @@ function refreshHtmlLevelMenu(preserveScroll = true) {
 
   ui.levelList.replaceChildren(fragment);
   ui.levelList.scrollLeft = scrollLeft;
+  htmlMenuScrollLeft = ui.levelList.scrollLeft;
   if (typeof ui.scheduleLayoutSettle === "function") {
     ui.scheduleLayoutSettle();
   } else if (typeof ui.updateLayout === "function") {
@@ -3227,7 +3259,7 @@ function syncHtmlLevelMenuVisibility() {
   if (gameMode === MODE_MENU) {
     if (!htmlMenuVisible) {
       setHtmlLevelMenuVisible(true);
-      refreshHtmlLevelMenu(false);
+      refreshHtmlLevelMenu(true);
     }
     if (typeof ui.updateScrollbar === "function") ui.updateScrollbar();
     return true;
@@ -3474,8 +3506,8 @@ function getLevelScrollbarGeometry() {
 }
 
 function getMenuButtonRect(expand = false) {
-  const w = width / 8;
   const h = height / 16;
+  const w = h;
   const x = width / 40;
   // Align top edge with reset button for consistent vertical level.
   const y = getResetButtonRect(false).y;
@@ -3495,18 +3527,25 @@ function drawGlobalMenuButton() {
   menuButtonRect = getMenuButtonRect(false);
   const { x, y, w, h } = menuButtonRect;
   // For hover/hit detection use expanded rect on touch devices
-  const hover = pointInRect(mouseX, mouseY, getMenuButtonRect(true));
+  const drawingInProgress = gameMode === MODE_PLAY && linePos.length > 0;
+  const hover = !drawingInProgress && pointInRect(mouseX, mouseY, getMenuButtonRect(true));
   if (hover) cursor(HAND);
   const borderW = hover ? 2 : 1;
-  fill(COLOR_WHITE);
-  stroke(COLOR_BLACK, ALPHA_OPAQUE);
+  const alpha = drawingInProgress ? 72 : ALPHA_OPAQUE;
+  fill(COLOR_WHITE, alpha);
+  stroke(COLOR_BLACK, alpha);
   strokeWeight(borderW);
-  rect(x + w / 2, y + h / 2, w, h, 10);
-  noStroke();
-  fill(COLOR_BLACK);
-  textAlign(CENTER, CENTER);
-  textSize(h * 0.52);
-  text("Menu", x + w / 2, y + h / 2);
+  rect(x + w / 2, y + h / 2, w, h, 8);
+  stroke(COLOR_BLACK, alpha);
+  strokeWeight(Math.max(2, h * 0.065));
+  strokeCap(ROUND);
+  const cx = x + w / 2;
+  const lineHalfW = w * 0.22;
+  const gap = h * 0.16;
+  line(cx - lineHalfW, y + h / 2 - gap, cx + lineHalfW, y + h / 2 - gap);
+  line(cx - lineHalfW, y + h / 2, cx + lineHalfW, y + h / 2);
+  line(cx - lineHalfW, y + h / 2 + gap, cx + lineHalfW, y + h / 2 + gap);
+  strokeCap(SQUARE);
 }
 
 function enterMenu() {
@@ -4176,6 +4215,7 @@ function mouseReleased(event) {
   if (
     (gameMode === MODE_PLAY || gameMode === MODE_RESULT) &&
     menuButtonArmed &&
+    !(gameMode === MODE_PLAY && linePos.length > 0) &&
     pointInRectWithSlop(releaseX, releaseY, getMenuButtonRect(true), buttonReleaseSlop)
   ) {
     enterMenu();
@@ -4458,7 +4498,7 @@ function drawObjects() {
     }
   }
   for (let i = cShapes.length - 1; i >= 0; i--) { cShapes[i].draw(); if (cShapes[i].done()) cShapes.splice(i, 1); }
-  for (let i = 1; i < linePos.length; i++) { stroke(COLOR_GRAY_MID); strokeWeight(d); line(linePos[i].x, linePos[i].y, linePos[i - 1].x, linePos[i - 1].y); strokeWeight(1); }
+  drawPendingLinePath(linePos, d);
   for (let i = lines.length - 1; i >= 0; i--) {
     lines[i].draw();
     if (lines[i].done()) lines.splice(i, 1);
