@@ -33,6 +33,8 @@ const MENU_SCROLL_STEP_PX = 100;
 const MENU_SCROLLBAR_BOTTOM_AREA_MIDPOINT = 0.5;
 const LEVEL_PREVIEW_RENDER_WIDTH = Math.round(BASE_WIDTH);
 const LEVEL_PREVIEW_RENDER_HEIGHT = Math.round((LEVEL_PREVIEW_RENDER_WIDTH * BASE_HEIGHT) / BASE_WIDTH);
+const SAVED_PREVIEW_WIDTH = 320;
+const SAVED_PREVIEW_HEIGHT = Math.round((SAVED_PREVIEW_WIDTH * BASE_HEIGHT) / BASE_WIDTH);
 
 const PARTICLE_LIFE_FRAMES = 80;
 const PARTICLE_DAMPING = 0.93;
@@ -69,7 +71,6 @@ const DEFAULT_ROTOR_MOTOR_TORQUE = 1000000000;
 const MODE_PLAY = 1;
 const MODE_RESULT = 2;
 const MODE_MENU = 4;
-const MODE_NEXT_LEVEL = 5;
 
 let box2d;
 let canvasRenderer;
@@ -132,7 +133,7 @@ class B2D {
     this.stepAccumulator = 0;
   }
   createWorld() {
-    this.world = planck.World(planck.Vec2(0, -20));
+    this.world = new planck.World({ gravity: { x: 0, y: -20 } });
     if (this.world && typeof this.world.on === "function") {
       this.world.on("begin-contact", (contact) => {
         if (isPlayerCircleContact(contact)) playerCircleContactThisStep = true;
@@ -173,6 +174,27 @@ function setBodyContinuousCollision(body, enabled = true) {
   if (enabled && typeof body.setBullet === "function") body.setBullet(true);
 }
 
+function distSq(x0, y0, x1, y1) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  return dx * dx + dy * dy;
+}
+
+function screenPointFromBody(body) {
+  const pos = body?.getPosition?.();
+  if (!pos) return null;
+  return {
+    x: box2d.wToPx(pos.x),
+    y: -box2d.wToPx(pos.y),
+  };
+}
+
+function bodyWithinRadiusPx(body, x, y, radiusPx) {
+  const p = screenPointFromBody(body);
+  if (!p) return false;
+  return distSq(p.x, p.y, x, y) <= radiusPx * radiusPx;
+}
+
 function isPlayerCircleContact(contact) {
   if (!contact || circles.length < 2) return false;
   const bodyA = contact.getFixtureA()?.getBody?.();
@@ -189,6 +211,7 @@ class Box {
     // Coordinates, size, and static/dynamic mode for a box body.
     this.x = x; this.y = y; this.w = w; this.h = h; this.st = st;
     this.a = Number(a) || 0;
+    this.boundR = Math.hypot(w / 2, h / 2);
     this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
     this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
     if (!st) setBodyContinuousCollision(this.body, true);
@@ -197,6 +220,8 @@ class Box {
   }
   contains(x, y, dia) {
     // Checks if coordinates are inside this box.
+    const brushR = Math.max(0, Number(dia) || 0) / 2;
+    if (!bodyWithinRadiusPx(this.body, x, y, this.boundR + brushR)) return false;
     const p = box2d.p2w(x, y);
     for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
     return false;
@@ -502,6 +527,7 @@ class ArcBox {
     this.side = this.sides[0];
     this.st = st;
     this.a = Number(a) || 0;
+    this.boundR = Math.hypot(w / 2, h / 2);
     this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
     this.localPoints = buildArcBoxLocalPoints(w, h, this.cut, this.sides);
     this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
@@ -518,6 +544,7 @@ class ArcBox {
     this.body.setUserData(this);
   }
   contains(x, y) {
+    if (!bodyWithinRadiusPx(this.body, x, y, this.boundR)) return false;
     const p = box2d.p2w(x, y);
     for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
     return false;
@@ -713,6 +740,7 @@ class RigidGroup {
     this.body.setUserData(this);
   }
   contains(x, y) {
+    if (!bodyWithinRadiusPx(this.body, x, y, this.boundR)) return false;
     const p = box2d.p2w(x, y);
     for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
     return false;
@@ -748,8 +776,12 @@ class Circle {
   change() { this.c = color(...COLOR_SUCCESS_RGB); }
   contains(x, y, dia) {
     // Checks if coordinates are inside this circle.
-    this.pos = box2d.getBodyPos(this.body);
-    return dist(this.pos.x, this.pos.y, x, y) < this.r + dia / 2;
+    const p = screenPointFromBody(this.body);
+    if (!p) return false;
+    this.pos.x = p.x;
+    this.pos.y = p.y;
+    const radius = this.r + (Number(dia) || 0) / 2;
+    return distSq(p.x, p.y, x, y) < radius * radius;
   }
   done() {
     const p = box2d.getBodyPos(this.body);
@@ -772,10 +804,13 @@ class LineBody {
     this.lineDot = points.map((p) => createVector(p.x, p.y));
     // List of body-local offsets for each coordinate.
     this.offset = [planck.Vec2(0, 0)];
+    this.offsetPx = [{ x: 0, y: 0 }];
     // List of center coordinates used to draw the connecting rectangles.
     this.center = [planck.Vec2(0, 0)];
+    this.centerPx = [{ x: 0, y: 0 }];
     // List of segment vectors and per-segment angles.
     this.l = [planck.Vec2(0, 0)];
+    this.segmentWidthPx = [0];
     this.angle = [0];
 
     this.body = box2d.world.createBody({ type: "dynamic", position: box2d.p2w(this.lineDot[0].x, this.lineDot[0].y) });
@@ -788,18 +823,17 @@ class LineBody {
       const o = box2d.p2w(this.lineDot[i].x, this.lineDot[i].y);
       const local = planck.Vec2(o.x - origin.x, o.y - origin.y);
       this.offset.push(local);
+      this.offsetPx.push({ x: box2d.wToPx(local.x), y: -box2d.wToPx(local.y) });
       this.boundR = Math.max(this.boundR, box2d.wToPx(Math.hypot(local.x, local.y)) + this.h / 2);
-
-      const p1 = createVector(this.offset[i - 1].x, this.offset[i - 1].y);
-      const p2 = createVector(this.offset[i].x, this.offset[i].y);
-      p1.sub(p2);
-      this.angle.push(p1.heading());
 
       const lv = planck.Vec2(this.offset[i - 1].x - this.offset[i].x, this.offset[i - 1].y - this.offset[i].y);
       this.l.push(lv);
       const w = Math.sqrt(lv.x * lv.x + lv.y * lv.y);
+      this.segmentWidthPx.push(box2d.wToPx(w));
       const c = planck.Vec2((this.offset[i - 1].x + this.offset[i].x) * 0.5, (this.offset[i - 1].y + this.offset[i].y) * 0.5);
       this.center.push(c);
+      this.centerPx.push({ x: box2d.wToPx(c.x), y: -box2d.wToPx(c.y) });
+      this.angle.push(Math.atan2(lv.y, lv.x));
 
       this.body.createFixture(planck.Circle(this.offset[i], box2d.pxToW(this.h / 2)), { ...DRAWN_LINE_FIXTURE_DEF });
       this.body.createFixture(planck.Box(w / 2, box2d.pxToW(this.h / 2), c, this.angle[i]), { ...DRAWN_LINE_FIXTURE_DEF });
@@ -837,8 +871,10 @@ class LineBody {
   delete() { box2d.destroy(this.body); }
   done() {
     // Checks if the line is farther off-screen than its max span.
-    const p = box2d.getBodyPos(this.body);
-    if (p.x < -width || p.x > width * 2 || p.y > height * 2) { this.delete(); return true; }
+    const p = screenPointFromBody(this.body);
+    if (!p) return false;
+    const margin = this.boundR + this.h;
+    if (p.x < -margin || p.x > width + margin || p.y > height + margin) { this.delete(); return true; }
     return false;
   }
   draw() {
@@ -846,13 +882,10 @@ class LineBody {
     const pos = box2d.getBodyPos(this.body);
     push(); translate(pos.x, pos.y); rotate(-this.body.getAngle()); noStroke(); if (info) fill(COLOR_GRAY_MID, ALPHA_DIM); else fill(COLOR_GRAY_MID);
     // Draw first point.
-    ellipse(box2d.wToPx(this.offset[0].x), -box2d.wToPx(this.offset[0].y), this.h, this.h);
+    ellipse(this.offsetPx[0].x, this.offsetPx[0].y, this.h, this.h);
     for (let i = 1; i < this.lineDot.length; i++) {
-      const x = box2d.wToPx(this.center[i].x);
-      const y = -box2d.wToPx(this.center[i].y);
-      const w = box2d.wToPx(Math.sqrt(this.l[i].x * this.l[i].x + this.l[i].y * this.l[i].y));
-      push(); translate(x, y); rotate(-this.angle[i]); rect(0, 0, w, this.h); pop();
-      ellipse(box2d.wToPx(this.offset[i].x), -box2d.wToPx(this.offset[i].y), this.h, this.h);
+      push(); translate(this.centerPx[i].x, this.centerPx[i].y); rotate(-this.angle[i]); rect(0, 0, this.segmentWidthPx[i], this.h); pop();
+      ellipse(this.offsetPx[i].x, this.offsetPx[i].y, this.h, this.h);
     }
     pop();
   }
@@ -864,6 +897,7 @@ class CustomShape {
     this.x = x; this.y = y; this.w = w; this.h = h; this.e = max(3, e); this.st = st;
     this.c = st ? color(COLOR_GRAY_LIGHT) : color(COLOR_GRAY_MID);
     this.a = Number(a) || 0;
+    this.boundR = this.e <= 8 ? Math.hypot(w, h) : (w + h) / 2;
     this.body = box2d.world.createBody({ type: st ? "static" : "dynamic", position: box2d.p2w(x, y), angle: -radians(this.a) });
     if (!st) setBodyContinuousCollision(this.body, true);
     if (this.e <= 8) {
@@ -881,6 +915,7 @@ class CustomShape {
   }
   contains(x, y) {
     // Checks if coordinates are inside this shape.
+    if (!bodyWithinRadiusPx(this.body, x, y, this.boundR)) return false;
     const p = box2d.p2w(x, y);
     for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
     return false;
@@ -934,6 +969,8 @@ class Rotor {
     this.parts = (Array.isArray(parts) ? parts : [])
       .map(normalizeRigidGroupPart)
       .filter(Boolean);
+    this.boundR = Math.hypot(this.w, this.h);
+    for (const part of this.parts) this.boundR = Math.max(this.boundR, rigidGroupPartRadiusPx(part));
 
     const initialAngle = -radians(this.a);
     this.fixture = new Box(x, y, h / 2, h / 2, true);
@@ -1024,26 +1061,35 @@ class Rotor {
 
   contains(x, y, dia) {
     // Checks if coordinates are inside this rotor's fixtures.
-    const samples = [{ x, y }];
+    const brushR = Math.max(0, Number(dia) || 0) / 2;
+    if (!bodyWithinRadiusPx(this.body, x, y, this.boundR + brushR)) return false;
     const r = (Number(dia) || 0) / 2;
-    if (r > 0) {
-      const d = r * 0.7071;
-      samples.push({ x: x - r, y }, { x: x + r, y }, { x, y: y - r }, { x, y: y + r });
-      samples.push({ x: x - d, y: y - d }, { x: x + d, y: y - d }, { x: x - d, y: y + d }, { x: x + d, y: y + d });
-    }
-    for (const s of samples) {
-      const p = box2d.p2w(s.x, s.y);
+    const hitsPoint = (sx, sy) => {
+      const p = box2d.p2w(sx, sy);
       for (let f = this.body.getFixtureList(); f; f = f.getNext()) if (f.testPoint(p)) return true;
-    }
-    return false;
+      return false;
+    };
+    if (hitsPoint(x, y)) return true;
+    if (r <= 0) return false;
+    const d = r * 0.7071;
+    return (
+      hitsPoint(x - r, y) ||
+      hitsPoint(x + r, y) ||
+      hitsPoint(x, y - r) ||
+      hitsPoint(x, y + r) ||
+      hitsPoint(x - d, y - d) ||
+      hitsPoint(x + d, y - d) ||
+      hitsPoint(x - d, y + d) ||
+      hitsPoint(x + d, y + d)
+    );
   }
 
   delete() {
     if (this.fixture) this.fixture.delete();
     if (this.body) box2d.destroy(this.body);
   }
-  applyMotorHardPin() {
-    if (!this.motor || !this.body || !this.fixture) return;
+  applyAxisHardPin() {
+    if (!this.body || !this.fixture) return;
     const anchor = this.fixture.body.getWorldCenter();
     if (!anchor) return;
     const angle = this.body.getAngle();
@@ -1168,6 +1214,7 @@ function setup() {
   if (!levelsLoadingFromSources) generateDefaultPreviews();
 
   loadScores();
+  if (!levelsLoadingFromSources && scoreStore.rows.length > 0) saveScores();
   reconcileUpdatedCustomLevelProgress();
   if (!levelsLoadingFromSources) loadStoredPreviews();
   circleR = width / 50;
@@ -1202,9 +1249,9 @@ function setup() {
         reconcileUpdatedCustomLevelProgress();
         generateDefaultPreviews();
         loadStoredPreviews();
-        scoreStore.rows = scoreStore.rows.map(normalizeRow);
         if (level > getMaxLevelIndex()) level = 0;
         levelsLoadingFromSources = false;
+        if (normalizeScoreStoreRows()) saveScores();
         if (gameMode === MODE_MENU) refreshHtmlLevelMenu(false);
         if (hasFetchedLevels) console.info(`Loaded ${getLevelCount()} levels from manifest/data files.`);
         else console.warn("Using CONNECT_LEVEL_DATA fallback because manifest/data files were unavailable.");
@@ -1216,9 +1263,9 @@ function setup() {
           reconcileUpdatedCustomLevelProgress();
           generateDefaultPreviews();
           loadStoredPreviews();
-          scoreStore.rows = scoreStore.rows.map(normalizeRow);
           if (level > getMaxLevelIndex()) level = 0;
           levelsLoadingFromSources = false;
+          if (normalizeScoreStoreRows()) saveScores();
           if (gameMode === MODE_MENU) refreshHtmlLevelMenu(false);
         } else {
           levelsLoadingFromSources = false;
@@ -1339,6 +1386,27 @@ async function reloadLevelDataFromSources() {
 function getLevelCount() { return levelDefs.length; }
 function getMaxLevelIndex() { return Math.max(0, getLevelCount() - 1); }
 
+function normalizeLevelDefId(rawId, fallbackIndex = 0) {
+  if (typeof rawId === "string" && rawId.trim().length > 0) return rawId.trim();
+  if (Number.isInteger(rawId)) return `level_${rawId}`;
+  return `level_${fallbackIndex}`;
+}
+
+function levelIdForIndex(levelIndex) {
+  const idx = Number(levelIndex);
+  if (!Number.isInteger(idx) || idx < 0) return "level_0";
+  return normalizeLevelDefId(levelDefs[idx]?.id, idx);
+}
+
+function levelIdAliasesForIndex(levelIndex) {
+  const idx = Number(levelIndex);
+  const aliases = [levelIdForIndex(idx)];
+  if (Number.isInteger(idx) && idx >= 0) {
+    aliases.push(String(idx), `level_${idx}`);
+  }
+  return [...new Set(aliases.filter((id) => typeof id === "string" && id.length > 0))];
+}
+
 function normalizeLevelMenuFilter(value) {
   const v = String(value || "").toLowerCase();
   if (v === "custom") return "custom";
@@ -1457,36 +1525,23 @@ function openCustomLevelInEditor(levelDefId, options = {}) {
   return true;
 }
 
-function reindexCustomLevelsSequentially(levels) {
-  const source = Array.isArray(levels) ? levels : [];
-  const out = [];
-  for (let i = 0; i < source.length; i++) {
-    const normalized = normalizeCustomLevelStorageEntry(source[i], i);
-    if (!normalized) continue;
-    const nextIndex = out.length;
-    out.push({
-      ...normalized,
-      id: `editor_${nextIndex}`,
-      editorLevel: nextIndex,
-      name: `Editor ${nextIndex}`,
-    });
-  }
-  return out;
-}
-
 function deleteCustomLevelByLevelDefId(levelDefId) {
   const found = findStoredCustomLevelByLevelDefId(levelDefId);
   if (!found) return false;
   if (!window.confirm("Delete this custom level?")) return false;
 
   const survivors = found.levels.filter((_entry, idx) => idx !== found.index);
-  const nextLevels = reindexCustomLevelsSequentially(survivors);
   try {
-    persistCustomLevelsPayload({ version: 1, levels: nextLevels });
+    persistCustomLevelsPayload({ version: 1, levels: survivors });
   } catch {
     return false;
   }
 
+  const levelIndex = levelDefs.findIndex((def) => def?.id === levelDefId);
+  const changed = levelIndex >= 0
+    ? clearLevelProgressAtIndex(levelIndex)
+    : clearLevelProgressForLevelId(levelDefId);
+  if (changed) saveScores();
   applyLoadedLevelData(levelData);
   reconcileUpdatedCustomLevelProgress();
   generateDefaultPreviews();
@@ -1516,15 +1571,52 @@ function saveCustomLevelMeta(stamps) {
   }
 }
 
-function clearLevelProgressAtIndex(levelIndex) {
-  if (!Number.isInteger(levelIndex) || levelIndex < 0) return false;
+function clearLevelProgressForLevelId(levelId, legacyLevelIndex = null) {
+  const stableId = String(levelId || "").trim();
+  if (!stableId) return false;
   let changed = false;
 
   try {
-    localStorage.removeItem(previewKey(levelIndex));
+    localStorage.removeItem(previewKeyForLevelId(stableId));
+    if (Number.isInteger(legacyLevelIndex) && legacyPreviewKey(legacyLevelIndex) !== previewKeyForLevelId(stableId)) {
+      localStorage.removeItem(legacyPreviewKey(legacyLevelIndex));
+    }
   } catch (err) {
-    console.warn("Failed to remove preview cache for level:", levelIndex, err);
+    console.warn("Failed to remove preview cache for level:", stableId, err);
   }
+
+  const aliases = Number.isInteger(legacyLevelIndex)
+    ? levelIdAliasesForIndex(legacyLevelIndex)
+    : [stableId];
+
+  for (const row of scoreStore.rows) {
+    if (!row || typeof row !== "object") continue;
+    if (!row.timeScoresByLevelId || typeof row.timeScoresByLevelId !== "object") row.timeScoresByLevelId = {};
+    if (!row.lineScoresByLevelId || typeof row.lineScoresByLevelId !== "object") row.lineScoresByLevelId = {};
+    for (const alias of aliases) {
+      if (Number(row.timeScoresByLevelId[alias]) > 0) changed = true;
+      if (Number(row.lineScoresByLevelId[alias]) > 0) changed = true;
+      delete row.timeScoresByLevelId[alias];
+      delete row.lineScoresByLevelId[alias];
+    }
+    if (Number.isInteger(legacyLevelIndex)) {
+      if (Array.isArray(row.timeScores) && Number(row.timeScores[legacyLevelIndex]) > 0) {
+        row.timeScores[legacyLevelIndex] = 0;
+        changed = true;
+      }
+      if (Array.isArray(row.lineScores) && Number(row.lineScores[legacyLevelIndex]) > 0) {
+        row.lineScores[legacyLevelIndex] = 0;
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
+}
+
+function clearLevelProgressAtIndex(levelIndex) {
+  if (!Number.isInteger(levelIndex) || levelIndex < 0) return false;
+  let changed = clearLevelProgressForLevelId(levelIdForIndex(levelIndex), levelIndex);
 
   if (levelImgDataUrl[levelIndex]) {
     levelImgDataUrl[levelIndex] = "";
@@ -1535,17 +1627,6 @@ function clearLevelProgressAtIndex(levelIndex) {
     levelImg[levelIndex] = levelDefaultImg[levelIndex];
     levelImgDataUrl[levelIndex] = levelDefaultImgDataUrl[levelIndex] || "";
     changed = true;
-  }
-
-  for (const row of scoreStore.rows) {
-    if (!Array.isArray(row?.timeScores) || !Array.isArray(row?.lineScores)) continue;
-    const prevTime = Number(row.timeScores[levelIndex]) || 0;
-    const prevLines = Number(row.lineScores[levelIndex]) || 0;
-    if (prevTime !== 0 || prevLines !== 0) {
-      row.timeScores[levelIndex] = 0;
-      row.lineScores[levelIndex] = 0;
-      changed = true;
-    }
   }
 
   return changed;
@@ -1725,12 +1806,21 @@ function loadCustomLevelsFromStorage() {
 
 function clearStoredCustomLevels() {
   if (!window.confirm("Delete all custom levels saved from the editor?")) return false;
+  const customIds = levelDefs
+    .filter((def) => isCustomLevelDefinition(def))
+    .map((def) => def.id);
   try {
     localStorage.removeItem(CUSTOM_LEVELS_KEY);
     localStorage.removeItem(CUSTOM_LEVEL_META_KEY);
   } catch (err) {
     console.warn("Failed to clear custom levels:", err);
   }
+  let changed = false;
+  for (const levelId of customIds) {
+    const levelIndex = levelDefs.findIndex((def) => def?.id === levelId);
+    changed = (levelIndex >= 0 ? clearLevelProgressAtIndex(levelIndex) : clearLevelProgressForLevelId(levelId)) || changed;
+  }
+  if (changed) saveScores();
   applyLoadedLevelData(levelData);
   generateDefaultPreviews();
   loadStoredPreviews();
@@ -1805,11 +1895,7 @@ function normalizeLevelDefinitions(rawData) {
   const out = [];
   for (let i = 0; i < sourceLevels.length; i++) {
     const srcLevel = sourceLevels[i];
-    const rawId = srcLevel?.id;
-    let id = "";
-    if (typeof rawId === "string" && rawId.trim().length > 0) id = rawId.trim();
-    else if (Number.isInteger(rawId)) id = String(rawId);
-    else id = `level_${i}`;
+    const id = normalizeLevelDefId(srcLevel?.id, i);
     const srcObjects = Array.isArray(srcLevel?.objects) ? srcLevel.objects : [];
     const objects = [];
     for (const rawObject of srcObjects) {
@@ -2260,21 +2346,6 @@ function draw() {
   if (gameMode === MODE_PLAY || gameMode === MODE_RESULT) drawGlobalMenuButton();
   if (gameMode === MODE_MENU && (levelsLoadingFromSources || menuOpenPending)) drawLevelMenuLoading(menuOpenPending ? "Opening menu..." : "Loading levels...");
   else if (gameMode === MODE_MENU && !htmlMenuDrawn) drawLevelMenu();
-  if (gameMode === MODE_NEXT_LEVEL) {
-    let shouldLoadNextLevel = true;
-    if (editorTestMode) {
-      level = 0;
-    } else {
-      saveLevelPreview(level);
-      if (level < getMaxLevelIndex()) {
-        level++;
-      } else {
-        enterMenu();
-        shouldLoadNextLevel = false;
-      }
-    }
-    if (shouldLoadNextLevel) loadLevel(false);
-  }
 }
 
 function drawPlayMode() {
@@ -2314,7 +2385,6 @@ function drawResetButton() {
   const rx = r.x + r.w / 2;
   const ry = r.y + r.h / 2;
   const rw = r.w;
-  if (gameMode === MODE_PLAY) testConnection();
   drawRetryIcon(rx, ry, rw, dist(mouseX, mouseY, rx, ry) < rw / 2 ? COLOR_BLACK : COLOR_GRAY_MID);
 }
 
@@ -2369,16 +2439,6 @@ function drawPlayTriangle(cx, cy, side) {
     cx - h / 3, cy + side / 2,
     cx + (2 * h) / 3, cy
   );
-}
-
-function drawPlayIcon(x, y, size, shade) {
-  push();
-  translate(x, y);
-  noStroke();
-  fill(shade);
-  const side = size * 0.62;
-  drawPlayTriangle(0, 0, side);
-  pop();
 }
 
 function drawRetryIcon(x, y, size, shade) {
@@ -3538,15 +3598,89 @@ function selectExistingPlayer(name) {
   return false;
 }
 
-function normalizeRow(row) {
-  const storedTimeLen = Array.isArray(row?.timeScores) ? row.timeScores.length : 0;
-  const storedLineLen = Array.isArray(row?.lineScores) ? row.lineScores.length : 0;
-  // Never shrink loaded score arrays based on a temporarily smaller level count.
-  const scoreLen = Math.max(1, getLevelCount(), storedTimeLen, storedLineLen);
-  const out = { id: String(row?.id ?? `${Date.now()}_${Math.floor(Math.random() * ID_RANDOM_RANGE)}`), name: sanitizePlayerName(String(row?.name ?? "Player")), timeScores: new Array(scoreLen).fill(0), lineScores: new Array(scoreLen).fill(0) };
-  if (Array.isArray(row?.timeScores)) for (let i = 0; i < scoreLen; i++) out.timeScores[i] = Number(row.timeScores[i]) || 0;
-  if (Array.isArray(row?.lineScores)) for (let i = 0; i < scoreLen; i++) out.lineScores[i] = Number(row.lineScores[i]) || 0;
+function normalizeScoreMap(rawMap) {
+  const out = {};
+  if (!rawMap || typeof rawMap !== "object" || Array.isArray(rawMap)) return out;
+  for (const [rawKey, rawValue] of Object.entries(rawMap)) {
+    const key = String(rawKey || "").trim();
+    const value = Number(rawValue) || 0;
+    if (key && value > 0) out[key] = value;
+  }
   return out;
+}
+
+function assignBestTimeScore(map, levelId, value) {
+  const score = Number(value) || 0;
+  if (!levelId || score <= 0) return false;
+  const prev = Number(map[levelId]) || 0;
+  if (prev > 0 && prev <= score) return false;
+  map[levelId] = score;
+  return true;
+}
+
+function assignBestLineScore(map, levelId, value) {
+  const score = Number(value) || 0;
+  if (!levelId || score <= 0) return false;
+  const prev = Number(map[levelId]) || 0;
+  if (prev > 0 && prev <= score) return false;
+  map[levelId] = score;
+  return true;
+}
+
+function removeKnownLevelAliases(map, scoreLen) {
+  for (let i = 0; i < scoreLen; i++) {
+    const primary = levelIdForIndex(i);
+    for (const alias of levelIdAliasesForIndex(i)) {
+      if (alias !== primary) delete map[alias];
+    }
+  }
+}
+
+function normalizeRow(row, options = {}) {
+  const keepLegacyArrays = Boolean(options?.keepLegacyArrays);
+  const sourceTimeScores = Array.isArray(row?.timeScores) ? row.timeScores : [];
+  const sourceLineScores = Array.isArray(row?.lineScores) ? row.lineScores : [];
+  const scoreLen = Math.max(1, getLevelCount(), sourceTimeScores.length, sourceLineScores.length);
+  const rawTimeMap = normalizeScoreMap(row?.timeScoresByLevelId || row?.timeScoreByLevelId);
+  const rawLineMap = normalizeScoreMap(row?.lineScoresByLevelId || row?.lineScoreByLevelId);
+  const timeScoresByLevelId = { ...rawTimeMap };
+  const lineScoresByLevelId = { ...rawLineMap };
+
+  for (let i = 0; i < scoreLen; i++) {
+    const levelId = levelIdForIndex(i);
+    for (const alias of levelIdAliasesForIndex(i)) {
+      assignBestTimeScore(timeScoresByLevelId, levelId, rawTimeMap[alias]);
+      assignBestLineScore(lineScoresByLevelId, levelId, rawLineMap[alias]);
+    }
+    assignBestTimeScore(timeScoresByLevelId, levelId, sourceTimeScores[i]);
+    assignBestLineScore(lineScoresByLevelId, levelId, sourceLineScores[i]);
+  }
+  removeKnownLevelAliases(timeScoresByLevelId, scoreLen);
+  removeKnownLevelAliases(lineScoresByLevelId, scoreLen);
+
+  const out = {
+    id: String(row?.id ?? `${Date.now()}_${Math.floor(Math.random() * ID_RANDOM_RANGE)}`),
+    name: sanitizePlayerName(String(row?.name ?? "Player")),
+    timeScoresByLevelId,
+    lineScoresByLevelId,
+  };
+
+  if (keepLegacyArrays) {
+    out.timeScores = new Array(scoreLen).fill(0);
+    out.lineScores = new Array(scoreLen).fill(0);
+    for (let i = 0; i < scoreLen; i++) {
+      out.timeScores[i] = Number(sourceTimeScores[i]) || 0;
+      out.lineScores[i] = Number(sourceLineScores[i]) || 0;
+    }
+  }
+
+  return out;
+}
+
+function normalizeScoreStoreRows(options = {}) {
+  const before = JSON.stringify(scoreStore.rows);
+  scoreStore.rows = scoreStore.rows.map((row) => normalizeRow(row, options));
+  return JSON.stringify(scoreStore.rows) !== before;
 }
 
 function loadScores() {
@@ -3555,7 +3689,9 @@ function loadScores() {
     const raw = localStorage.getItem(SCORE_KEY);
     if (!raw) return;
     const p = JSON.parse(raw);
-    scoreStore.rows = Array.isArray(p.rows) ? p.rows.map(normalizeRow) : [];
+    scoreStore.rows = Array.isArray(p.rows)
+      ? p.rows.map((row) => normalizeRow(row, { keepLegacyArrays: levelsLoadingFromSources }))
+      : [];
     scoreStore.activeRowId = p.activeRowId ? String(p.activeRowId) : null;
     if (scoreStore.activeRowId && !scoreStore.rows.some((r) => r.id === scoreStore.activeRowId)) scoreStore.activeRowId = null;
   } catch {
@@ -3563,7 +3699,10 @@ function loadScores() {
   }
 }
 
-function saveScores() { localStorage.setItem(SCORE_KEY, JSON.stringify(scoreStore)); }
+function saveScores() {
+  normalizeScoreStoreRows({ keepLegacyArrays: levelsLoadingFromSources });
+  localStorage.setItem(SCORE_KEY, JSON.stringify(scoreStore));
+}
 function clearAllGameData() {
   const confirmed = window.confirm("Delete all saved game data? This will clear players, records, custom levels, and saved level previews.");
   if (!confirmed) return false;
@@ -3592,8 +3731,12 @@ function clearAllGameData() {
 }
 function createScoreRow(name) {
   // Add a new player session row.
-  const scoreLen = Math.max(1, getLevelCount());
-  const row = { id: `${Date.now()}_${Math.floor(Math.random() * ID_RANDOM_RANGE)}`, name: sanitizePlayerName(name), timeScores: new Array(scoreLen).fill(0), lineScores: new Array(scoreLen).fill(0) };
+  const row = {
+    id: `${Date.now()}_${Math.floor(Math.random() * ID_RANDOM_RANGE)}`,
+    name: sanitizePlayerName(name),
+    timeScoresByLevelId: {},
+    lineScoresByLevelId: {},
+  };
   scoreStore.rows.push(row); scoreStore.activeRowId = row.id; saveScores();
 }
 function getActiveRow() { return scoreStore.rows.find((r) => r.id === scoreStore.activeRowId) || null; }
@@ -3602,24 +3745,38 @@ function updateCurrentScore(lv, ms, lineCount) {
   const row = getActiveRow();
   if (!row) return;
 
-  while (row.timeScores.length <= lv) row.timeScores.push(0);
-  while (row.lineScores.length <= lv) row.lineScores.push(0);
+  const normalized = normalizeRow(row, { keepLegacyArrays: levelsLoadingFromSources });
+  Object.assign(row, normalized);
+  const levelId = levelIdForIndex(lv);
 
-  const prevTime = Number(row.timeScores[lv]) || 0;
-  const prevLines = Number(row.lineScores[lv]) || 0;
+  const prevTime = Number(row.timeScoresByLevelId[levelId]) || 0;
+  const prevLines = Number(row.lineScoresByLevelId[levelId]) || 0;
 
-  if (Number(ms) > 0 && (prevTime === 0 || ms < prevTime)) row.timeScores[lv] = ms;
-  if (Number(lineCount) > 0 && (prevLines === 0 || lineCount < prevLines)) row.lineScores[lv] = lineCount;
+  if (Number(ms) > 0 && (prevTime === 0 || ms < prevTime)) row.timeScoresByLevelId[levelId] = ms;
+  if (Number(lineCount) > 0 && (prevLines === 0 || lineCount < prevLines)) row.lineScoresByLevelId[levelId] = lineCount;
   saveScores();
 }
+
+function getRowTimeScore(row, levelIndex) {
+  const normalized = normalizeRow(row, { keepLegacyArrays: levelsLoadingFromSources });
+  const levelId = levelIdForIndex(levelIndex);
+  return Number(normalized.timeScoresByLevelId[levelId]) || 0;
+}
+
+function getRowLineScore(row, levelIndex) {
+  const normalized = normalizeRow(row, { keepLegacyArrays: levelsLoadingFromSources });
+  const levelId = levelIdForIndex(levelIndex);
+  return Number(normalized.lineScoresByLevelId[levelId]) || 0;
+}
+
 function calcScore(lv) {
   // Calculate best time and best line count for one level across all rows.
   lv = constrain(lv, 0, getMaxLevelIndex());
   minTime = 0; minLines = 0; playerMinTime = null; playerMinLines = null;
   let t = Infinity, l = Infinity;
   for (const row of scoreStore.rows) {
-    const rt = Number(row.timeScores[lv]) || 0;
-    const rl = Number(row.lineScores[lv]) || 0;
+    const rt = getRowTimeScore(row, lv);
+    const rl = getRowLineScore(row, lv);
     if (rt > 0 && rt < t) { t = rt; playerMinTime = row.name; }
     if (rl > 0 && rl < l) { l = rl; playerMinLines = row.name; }
   }
@@ -3627,7 +3784,13 @@ function calcScore(lv) {
   minLines = Number.isFinite(l) ? l : 0;
 }
 
-function previewKey(i) { return `${PREVIEW_KEY}${i}`; }
+function previewKeyForLevelId(levelId) {
+  return `${PREVIEW_KEY}${String(levelId || "").trim()}`;
+}
+
+function legacyPreviewKey(i) { return `${PREVIEW_KEY}${i}`; }
+function previewKey(i) { return previewKeyForLevelId(levelIdForIndex(i)); }
+
 function loadStoredPreviews() {
   // Load persisted level thumbnails from localStorage.
   let pendingLoads = 0;
@@ -3638,7 +3801,20 @@ function loadStoredPreviews() {
   };
 
   for (let i = 0; i <= getMaxLevelIndex(); i++) {
-    const data = localStorage.getItem(previewKey(i));
+    const stableKey = previewKey(i);
+    const oldKey = legacyPreviewKey(i);
+    let data = localStorage.getItem(stableKey);
+    if (!data && oldKey !== stableKey) {
+      data = localStorage.getItem(oldKey);
+      if (data) {
+        try {
+          localStorage.setItem(stableKey, data);
+          localStorage.removeItem(oldKey);
+        } catch {}
+      }
+    } else if (data && oldKey !== stableKey) {
+      try { localStorage.removeItem(oldKey); } catch {}
+    }
     if (!data) continue;
     levelImgDataUrl[i] = data;
     pendingLoads++;
@@ -3657,16 +3833,35 @@ function loadStoredPreviews() {
 }
 function saveLevelPreview(i) {
   // Snapshot the current canvas as the level's preview image.
-  if (!canvasRenderer) return;
+  if (!canvasRenderer || !canvasRenderer.elt) return;
   try {
-    const data = canvasRenderer.elt.toDataURL("image/png");
+    const data = getSavedLevelPreviewDataUrl();
+    if (!data) return;
     localStorage.setItem(previewKey(i), data);
+    if (legacyPreviewKey(i) !== previewKey(i)) localStorage.removeItem(legacyPreviewKey(i));
     levelImgDataUrl[i] = data;
     loadImage(data, (img) => {
       levelImg[i] = img;
       if (gameMode === MODE_MENU) refreshHtmlLevelMenu();
     }, () => {});
   } catch {}
+}
+
+function getSavedLevelPreviewDataUrl() {
+  const source = canvasRenderer?.elt;
+  if (!source) return "";
+  if (typeof document === "undefined") return source.toDataURL("image/png");
+
+  const previewCanvas = document.createElement("canvas");
+  previewCanvas.width = SAVED_PREVIEW_WIDTH;
+  previewCanvas.height = SAVED_PREVIEW_HEIGHT;
+  const ctx = previewCanvas.getContext("2d");
+  if (!ctx) return source.toDataURL("image/png");
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, previewCanvas.width, previewCanvas.height);
+  return previewCanvas.toDataURL("image/png");
 }
 
 function fmtSecs(ms) { return (Number(ms) / 1000).toFixed(2); }
@@ -3680,7 +3875,6 @@ function formatFewestScore(playerName, lineCount) {
 }
 
 function formatFastestScore(playerName, ms) {
-  const sec = Number(fmtSecs(ms));
   return `fastest: ${playerName} [${fmtSecs(ms)}s]`;
 }
 
@@ -3708,9 +3902,11 @@ function testConnection() {
   if (circles.length <= 1) return;
   const a = box2d.getBodyPos(circles[0].body);
   const b = box2d.getBodyPos(circles[1].body);
-  circles[0].pos = a.copy(); circles[1].pos = b.copy();
+  circles[0].pos.x = a.x; circles[0].pos.y = a.y;
+  circles[1].pos.x = b.x; circles[1].pos.y = b.y;
   const touchedThisFrame = playerCircleContactThisStep;
-  if (p5.Vector.sub(b, a).mag() <= circleR * 2 || touchedThisFrame) {
+  const contactDistance = circles[0].r + circles[1].r;
+  if (distSq(a.x, a.y, b.x, b.y) <= contactDistance * contactDistance || touchedThisFrame) {
     if (editorTestMode) {
       // Editor test runs should not update persistent records or previews.
       runSetGlobalLineRecord = true;
@@ -3728,7 +3924,8 @@ function testConnection() {
     physics = false;
     const x = a.x - (a.x - b.x) / 2;
     const y = a.y - (a.y - b.y) / 2;
-    for (let i = 0; i < PARTICLES_ON_CONNECT; i++) particles.push(new Particle(x, y, circleR / 2, circles[0].c));
+    const particleSize = Math.min(circles[0].r, circles[1].r) / 2;
+    for (let i = 0; i < PARTICLES_ON_CONNECT; i++) particles.push(new Particle(x, y, particleSize, circles[0].c));
     gameMode = MODE_RESULT;
     levelUp = true;
   }
@@ -3738,7 +3935,6 @@ function keyPressed() {
   // Toggles debug info and handles mode hotkeys.
   if (player !== null) {
     if (key === "I" || key === "i") info = !info;
-    if (keyCode === ENTER) gameMode = MODE_NEXT_LEVEL;
     if (keyCode === ESCAPE) { enterMenu(); return false; }
   }
   return true;
@@ -3885,7 +4081,7 @@ function mouseDragged(event) {
   if (drawPermit && gameMode === MODE_PLAY) {
     if (linePos.length > 0) {
       const l = linePos[linePos.length - 1];
-      if (dist(dragX, dragY, l.x, l.y) > d) linePos.push(createVector(dragX, dragY));
+      if (distSq(dragX, dragY, l.x, l.y) > d * d) linePos.push(createVector(dragX, dragY));
     } else linePos.push(createVector(dragX, dragY));
   }
   if (gameMode === MODE_MENU) {
@@ -3897,7 +4093,7 @@ function mouseDragged(event) {
       imgScroll = map(clampedCenterX, scrollbar.trackPadding, width - scrollbar.trackPadding, 0, scrollbar.minScroll);
       imgScroll = clampLevelScroll(imgScroll);
     }
-    if (!menuDragMoved && dist(dragX, dragY, menuDragStartX, menuDragStartY) > MENU_DRAG_THRESHOLD_PX) menuDragMoved = true;
+    if (!menuDragMoved && distSq(dragX, dragY, menuDragStartX, menuDragStartY) > MENU_DRAG_THRESHOLD_PX * MENU_DRAG_THRESHOLD_PX) menuDragMoved = true;
   }
 }
 
@@ -4138,14 +4334,16 @@ function touchEnded(event) {
   return false;
 }
 
-function appendSegmentTestPoints(out, x0, y0, x1, y1, stepPx) {
-  const segDist = dist(x0, y0, x1, y1);
-  if (segDist <= 0) return;
+function visitSegmentTestPoints(x0, y0, x1, y1, stepPx, visitPoint) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const segDist = Math.sqrt(dx * dx + dy * dy);
+  if (segDist <= 0 || typeof visitPoint !== "function") return;
   const step = Math.max(1, Number(stepPx) || 1);
   const count = Math.max(1, Math.ceil(segDist / step));
   for (let i = 1; i < count; i++) {
     const t = i / count;
-    out.push(createVector(lerp(x0, x1, t), lerp(y0, y1, t)));
+    visitPoint(lerp(x0, x1, t), lerp(y0, y1, t));
   }
 }
 
@@ -4168,32 +4366,16 @@ function brushBlockedAt(x, y, dia) {
   const r = inflatedDia / 2;
   if (r <= 0) return false;
   const dxy = r * 0.7071;
-  const offsets = [
-    [-r, 0], [r, 0], [0, -r], [0, r],
-    [-dxy, -dxy], [dxy, -dxy], [-dxy, dxy], [dxy, dxy]
-  ];
-  for (const [ox, oy] of offsets) {
-    if (pointBlockedBySolids(x + ox, y + oy, 0)) return true;
-  }
-  return false;
-}
-
-function strokeBlocked(points, dia) {
-  if (!Array.isArray(points) || points.length < 1) return false;
-  const step = Math.max(1, (Number(dia) || 1) * DRAW_COLLISION_STEP_FACTOR);
-
-  // Validate each anchor and swept segment using full brush thickness.
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    if (brushBlockedAt(p.x, p.y, dia)) return true;
-    if (i > 0) {
-      const prev = points[i - 1];
-      const mid = [];
-      appendSegmentTestPoints(mid, prev.x, prev.y, p.x, p.y, step);
-      for (const m of mid) if (brushBlockedAt(m.x, m.y, dia)) return true;
-    }
-  }
-  return false;
+  return (
+    pointBlockedBySolids(x - r, y, 0) ||
+    pointBlockedBySolids(x + r, y, 0) ||
+    pointBlockedBySolids(x, y - r, 0) ||
+    pointBlockedBySolids(x, y + r, 0) ||
+    pointBlockedBySolids(x - dxy, y - dxy, 0) ||
+    pointBlockedBySolids(x + dxy, y - dxy, 0) ||
+    pointBlockedBySolids(x - dxy, y + dxy, 0) ||
+    pointBlockedBySolids(x + dxy, y + dxy, 0)
+  );
 }
 
 function checkEdge(px = mouseX, py = mouseY) {
@@ -4208,23 +4390,26 @@ function checkEdge(px = mouseX, py = mouseY) {
     return;
   }
 
-  linePosTest = [];
+  linePosTest.length = 0;
   if (linePos.length > 0) {
     const l = linePos[linePos.length - 1];
-    linePosTest.push(l.copy());
     const step = Math.max(1, d * DRAW_COLLISION_STEP_FACTOR);
-    appendSegmentTestPoints(linePosTest, l.x, l.y, px, py, step);
+    if (info) linePosTest.push(l.copy());
+
+    let segmentBlocked = false;
+    visitSegmentTestPoints(l.x, l.y, px, py, step, (tx, ty) => {
+      if (info) linePosTest.push(createVector(tx, ty));
+      if (!segmentBlocked && brushBlockedAt(tx, ty, d)) segmentBlocked = true;
+    });
+    if (segmentBlocked) {
+      drawPermit = false;
+      return;
+    }
   }
 
   if (brushBlockedAt(px, py, d)) {
     drawPermit = false;
     return;
-  }
-  for (const t of linePosTest) {
-    if (brushBlockedAt(t.x, t.y, d)) {
-      drawPermit = false;
-      return;
-    }
   }
 }
 
@@ -4279,7 +4464,7 @@ function drawObjects() {
     if (lines[i].done()) lines.splice(i, 1);
   }
   for (let i = rotors.length - 1; i >= 0; i--) {
-    rotors[i].applyMotorHardPin();
+    rotors[i].applyAxisHardPin();
     rotors[i].draw();
     if (rotors[i].done()) rotors.splice(i, 1);
   }
@@ -4294,6 +4479,27 @@ function buildLevel() {
   }
 
   for (const obj of def.objects) spawnLevelObject(obj);
+}
+
+function buildRigidPartsPx(parts) {
+  const partsPx = [];
+  const source = Array.isArray(parts) ? parts : [];
+  for (const rawPart of source) {
+    const part = normalizeRigidGroupPart(rawPart);
+    if (!part) continue;
+    partsPx.push({
+      type: part.type,
+      x: part.x * width,
+      y: part.y * height,
+      w: part.w * width,
+      h: part.h * height,
+      edges: Number(part.edges) || 6,
+      cut: clampArcCut(part.cut),
+      sides: normalizeArcSides(part.sides ?? part.side, ARC_SIDE_TOP),
+      angle: Number(part.angle) || 0,
+    });
+  }
+  return partsPx;
 }
 
 function spawnLevelObject(obj) {
@@ -4328,27 +4534,10 @@ function spawnLevelObject(obj) {
   }
 
   if (obj.type === "rigid_group") {
-    const partsPx = [];
-    const parts = Array.isArray(obj.parts) ? obj.parts : [];
-    for (const rawPart of parts) {
-      const part = normalizeRigidGroupPart(rawPart);
-      if (!part) continue;
-      partsPx.push({
-        type: part.type,
-        x: part.x * width,
-        y: part.y * height,
-        w: part.w * width,
-        h: part.h * height,
-        edges: Number(part.edges) || 6,
-        cut: clampArcCut(part.cut),
-        sides: normalizeArcSides(part.sides ?? part.side, ARC_SIDE_TOP),
-        angle: Number(part.angle) || 0,
-      });
-    }
     rigidGroups.push(new RigidGroup(
       obj.x * width,
       obj.y * height,
-      partsPx,
+      buildRigidPartsPx(obj.parts),
       Boolean(obj.static),
       Number(obj.angle) || 0
     ));
@@ -4361,23 +4550,6 @@ function spawnLevelObject(obj) {
   }
 
   if (obj.type === "rotor") {
-    const partsPx = [];
-    const parts = Array.isArray(obj.parts) ? obj.parts : [];
-    for (const rawPart of parts) {
-      const part = normalizeRigidGroupPart(rawPart);
-      if (!part) continue;
-      partsPx.push({
-        type: part.type,
-        x: part.x * width,
-        y: part.y * height,
-        w: part.w * width,
-        h: part.h * height,
-        edges: Number(part.edges) || 6,
-        cut: clampArcCut(part.cut),
-        sides: normalizeArcSides(part.sides ?? part.side, ARC_SIDE_TOP),
-        angle: Number(part.angle) || 0,
-      });
-    }
     rotors.push(new Rotor(
       obj.x * width,
       obj.y * height,
@@ -4386,7 +4558,7 @@ function spawnLevelObject(obj) {
       obj.edges,
       Boolean(obj.motor),
       Number(obj.angle) || 0,
-      partsPx,
+      buildRigidPartsPx(obj.parts),
       normalizeRotorMotorSpeedDeg(obj.motorSpeed),
       normalizeRotorMotorDirection(obj.motorDirection),
       normalizeRotorMotorTorque(obj.motorTorque)
